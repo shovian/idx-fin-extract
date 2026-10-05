@@ -1,4 +1,5 @@
 import re
+from datetime import date
 
 from finx.models import Page, Profile
 from finx.numbers import detect_locale
@@ -27,6 +28,10 @@ def find_period_end(text: str) -> str | None:
     for y, m, d in found:
         mm, dd = _MONTHS.get(m.lower()), int(d)
         if mm and dd >= 28:  # period ends only; drops "1 Januari 2023" opening balances
+            try:
+                date(int(y), mm, dd)
+            except ValueError:
+                continue  # impossible calendar date
             dates.append((int(y), mm, dd))
     if not dates:
         return None
@@ -47,13 +52,25 @@ def find_scale(text: str) -> int | None:
     return None
 
 
+_USD = r"us\$|\busd\b|dolar|dollar"
+_IDR = r"rupiah|\brp\b|\bidr\b"
+_DECL = re.compile(
+    r"\b(?:disajikan|dinyatakan|expressed|presented|dalam|in)\b[^()]{0,40}?(rupiah|dolar|dollars?)"
+    r"|(us\$|\brp)\s*(?:['’]000|juta|million)",
+    re.I,
+)
+
+
 def find_currency(text: str) -> str | None:
     t = text.lower()
-    if re.search(r"us\$|\busd\b|dolar|dollar", t):
-        return "USD"
-    if re.search(r"rupiah|\brp\b|\bidr\b", t):
-        return "IDR"
-    return None
+    m = _DECL.search(t)
+    if m:  # the unit declaration decides
+        word = m.group(1) or m.group(2)
+        return "IDR" if word.startswith(("rupiah", "rp")) else "USD"
+    usd, idr = re.search(_USD, t), re.search(_IDR, t)
+    if usd and idr:
+        return None  # ambiguous: wrong is worse than empty
+    return "USD" if usd else "IDR" if idr else None
 
 
 def build_profile(pages: list[Page], blocks: dict[str, list[int]]) -> Profile:

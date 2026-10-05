@@ -55,3 +55,17 @@ def test_bank_detection_and_annual_report_type():
 
 def test_no_bs_block_means_no_fs():
     assert build_profile([], {"BS": []}).doc_type == "NO_FS"
+
+
+def test_period_end_ignores_impossible_dates():
+    assert find_period_end("31 JUNI 2025 DAN 31 DESEMBER 2024") == "2024-12-31"
+    assert find_period_end("30 FEBRUARI 2024") is None
+
+
+def test_currency_declaration_wins_over_word_presence():
+    assert find_currency("(Disajikan dalam jutaan Rupiah) Pinjaman dalam US$ 5 juta") == "IDR"
+    assert find_currency("(Expressed in thousands of US Dollars) Rupiah") == "USD"
+
+
+def test_currency_ambiguous_is_none():
+    assert find_currency("Rupiah dan Dolar AS") is None
