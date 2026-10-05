@@ -22,7 +22,8 @@ def _guard_file(rel: str, split: dict, root: Path) -> None:
     target = (root / rel).resolve()
     if not target.is_relative_to(root.resolve()):
         sys.exit(f"refusing: {rel!r} resolves outside the data root")
-    if target in {(root / t).resolve() for t in split["test"]}:
+    tests = [(root / t).resolve() for t in split["test"]]
+    if target in tests or (target.exists() and any(t.exists() and target.samefile(t) for t in tests)):
         sys.exit(f"refusing: {rel!r} belongs to the test split (anti-leak rule E.1)")
 
 

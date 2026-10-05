@@ -72,3 +72,19 @@ def test_extract_continues_past_failing_doc(monkeypatch, tmp_path, capsys):
     assert f"ERROR {bad}: boom" in capsys.readouterr().err
     lines = (tmp_path / "adhoc.jsonl").read_text().splitlines()
     assert lines == ['{"file": "%s"}' % good]
+
+
+def test_guard_refuses_case_variant(monkeypatch):
+    root, rel, _ = _test_rel()
+    variant = rel.swapcase()
+    if variant == rel or not (root / rel).exists() or not (root / variant).exists() \
+            or not (root / rel).samefile(root / variant):
+        pytest.skip("case-sensitive filesystem or test file absent")
+
+    def no_load(*a, **k):
+        raise AssertionError("must not load")
+
+    monkeypatch.setattr("finx.cli.load_pages", no_load)
+    with pytest.raises(SystemExit) as e:
+        main(["pages", variant])
+    assert "test split" in str(e.value)
