@@ -106,6 +106,13 @@ def _ratio(k: int, n: int) -> str:
 def evaluate(preds: list[dict], gold: list[dict], slices: dict[str, list[str]],
              policy: str = "strict", out_dir: Path = Path("out")) -> dict:
     by_file = {p["file"]: p for p in preds}
+    all_files = {f for files in slices.values() for f in files}
+    unknown = sorted({g["file"] for g in gold} - all_files)
+    counts = Counter(g["file"] for g in gold)
+    bad_count = sorted(f"{f} ({counts.get(f, 0)})" for f in all_files if counts.get(f, 0) != len(ALL_FIELDS))
+    if unknown or bad_count:
+        raise ValueError(f"gold/slice mismatch: gold files not in slices: {unknown}; "
+                         f"slice files without exactly {len(ALL_FIELDS)} gold rows: {bad_count}")
     items = []
     for g in gold:
         sl = next((s for s, files in slices.items() if g["file"] in files), None)
@@ -134,13 +141,15 @@ def evaluate(preds: list[dict], gold: list[dict], slices: dict[str, list[str]],
             "recall": c["correct"] / with_value if with_value else NAN,
             "recall_wilson95": wilson(c["correct"], with_value),
             "counts": dict(c),
+            "docs_without_pred": [f for f in slices[sl] if f not in by_file],
         }
         s = summary[sl]
         lines += [f"## {sl}", "",
                   f"- Headline precision **{s['precision']:.3f}** · Wilson95 {_fmt(s['precision_wilson95'])} "
                   f"· cluster-bootstrap95 {_fmt(s['precision_cluster_bootstrap95'])}",
                   f"- Headline recall **{s['recall']:.3f}** · Wilson95 {_fmt(s['recall_wilson95'])}",
-                  f"- Counts: {dict(c)}", "",
+                  f"- Counts: {dict(c)}",
+                  f"- Docs without prediction: {len(s['docs_without_pred'])} {s['docs_without_pred']}", "",
                   "| field | n | correct | wrong | missed | correct_abstain | precision | recall |",
                   "|---|---|---|---|---|---|---|---|"]
         for f in ALL_FIELDS:

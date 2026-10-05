@@ -65,7 +65,8 @@ GOLD = [{"file": "X/a.pdf", "field": "total_assets", "value": "100", "page": "4"
         {"file": "X/a.pdf", "field": "bs_page", "value": "4", "page": "4", "note": ""}]
 
 
-def test_evaluate_strict_vs_lenient(tmp_path):
+def test_evaluate_strict_vs_lenient(tmp_path, monkeypatch):
+    monkeypatch.setattr("finx.evaluate.ALL_FIELDS", tuple(g["field"] for g in GOLD))
     s = evaluate([_pred()], GOLD, {"build": ["X/a.pdf"]}, policy="strict", out_dir=tmp_path)
     assert s["build"]["counts"] == {"correct": 1, "missed": 1}
     assert (tmp_path / "eval_build.md").exists() and (tmp_path / "eval_build.csv").exists()
@@ -73,7 +74,8 @@ def test_evaluate_strict_vs_lenient(tmp_path):
     assert s2["build"]["counts"] == {"correct": 2}
 
 
-def test_no_fs_prediction_abstains_everywhere(tmp_path):
+def test_no_fs_prediction_abstains_everywhere(tmp_path, monkeypatch):
+    monkeypatch.setattr("finx.evaluate.ALL_FIELDS", ("doc_type", "is_bank", "total_assets"))
     pred = {"file": "X/sr.pdf", "ticker": "X", "pages": {"BS": [], "IS": [], "CF": []},
             "profile": {"doc_type": "NO_FS", "period_end": None, "currency": None, "scale": None,
                         "is_bank": False, "locale": "id", "period_months": None}, "fields": {}}
@@ -82,3 +84,32 @@ def test_no_fs_prediction_abstains_everywhere(tmp_path):
             {"file": "X/sr.pdf", "field": "total_assets", "value": "NA", "page": "", "note": ""}]
     s = evaluate([pred], gold, {"build": ["X/sr.pdf"]}, out_dir=tmp_path)
     assert s["build"]["counts"] == {"correct_abstain": 1}  # headline fields only
+
+
+def _full_gold(file, n=None):
+    from finx.gold import ALL_FIELDS
+    return [{"file": file, "field": f, "value": "NA", "page": "", "note": ""} for f in ALL_FIELDS[:n]]
+
+
+def test_misspelled_gold_file_raises(tmp_path):
+    gold = _full_gold("X/a.pdf") + _full_gold("X/typo.pdf")
+    with pytest.raises(ValueError, match="X/typo.pdf"):
+        evaluate([_pred()], gold, {"build": ["X/a.pdf"]}, out_dir=tmp_path)
+
+
+def test_doc_with_missing_gold_rows_raises(tmp_path):
+    gold = _full_gold("X/a.pdf", 18)
+    with pytest.raises(ValueError, match=r"X/a.pdf \(18\)"):
+        evaluate([_pred()], gold, {"build": ["X/a.pdf"]}, out_dir=tmp_path)
+
+
+def test_slice_file_without_any_gold_raises(tmp_path):
+    with pytest.raises(ValueError, match=r"X/b.pdf \(0\)"):
+        evaluate([], _full_gold("X/a.pdf"), {"build": ["X/a.pdf", "X/b.pdf"]}, out_dir=tmp_path)
+
+
+def test_docs_without_pred_reported(tmp_path):
+    gold = _full_gold("X/a.pdf") + _full_gold("X/b.pdf")
+    s = evaluate([_pred()], gold, {"build": ["X/a.pdf", "X/b.pdf"]}, out_dir=tmp_path)
+    assert s["build"]["docs_without_pred"] == ["X/b.pdf"]
+    assert "Docs without prediction: 1" in (tmp_path / "eval_build.md").read_text()

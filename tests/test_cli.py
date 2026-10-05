@@ -3,13 +3,25 @@ import pytest
 from finx.cli import main
 
 
-def test_test_split_extract_requires_final():
+@pytest.fixture
+def no_side_effects(monkeypatch, tmp_path):
+    """Guard tests must never parse a PDF or write into out/."""
+    def no_load(*a, **k):
+        raise AssertionError("must not load")
+
+    monkeypatch.setattr("finx.cli.load_pages", no_load)
+    monkeypatch.setattr("finx.cli.process", no_load)
+    monkeypatch.setattr("finx.cli.OUT", tmp_path)
+    return tmp_path
+
+
+def test_test_split_extract_requires_final(no_side_effects):
     with pytest.raises(SystemExit) as e:
         main(["extract", "--split", "test"])
     assert "--final" in str(e.value)
 
 
-def test_inspect_refuses_test_files():
+def test_inspect_refuses_test_files(no_side_effects):
     with pytest.raises(SystemExit) as e:
         main(["inspect", "AMMN/FS AMMN- 31 Dec 2024.pdf", "--page", "4"])
     assert "test split" in str(e.value)
@@ -22,7 +34,7 @@ def _test_rel():
 
 
 @pytest.mark.parametrize("cmd", [["pages"], ["inspect"]])
-def test_guard_refuses_alternate_spellings(cmd):
+def test_guard_refuses_alternate_spellings(cmd, no_side_effects):
     root, rel, _ = _test_rel()
     for spelled in (f"./{rel}", str(root / rel), f"{rel.split('/')[0]}/../{rel}"):
         argv = [*cmd, spelled] + (["--page", "1"] if cmd == ["inspect"] else [])
@@ -31,14 +43,14 @@ def test_guard_refuses_alternate_spellings(cmd):
         assert "test split" in str(e.value)
 
 
-def test_extract_files_refuses_alternate_spelling():
+def test_extract_files_refuses_alternate_spelling(no_side_effects):
     _, rel, _ = _test_rel()
     with pytest.raises(SystemExit) as e:
         main(["extract", "--files", f"./{rel}"])
     assert "test split" in str(e.value)
 
 
-def test_guard_refuses_path_outside_root():
+def test_guard_refuses_path_outside_root(no_side_effects):
     with pytest.raises(SystemExit) as e:
         main(["pages", "../x.pdf"])
     assert "outside" in str(e.value)
@@ -74,24 +86,20 @@ def test_extract_continues_past_failing_doc(monkeypatch, tmp_path, capsys):
     assert lines == ['{"file": "%s"}' % good]
 
 
-def test_guard_refuses_case_variant(monkeypatch):
+def test_guard_refuses_case_variant(no_side_effects):
     root, rel, _ = _test_rel()
     variant = rel.swapcase()
     if variant == rel or not (root / rel).exists() or not (root / variant).exists() \
             or not (root / rel).samefile(root / variant):
         pytest.skip("case-sensitive filesystem or test file absent")
 
-    def no_load(*a, **k):
-        raise AssertionError("must not load")
-
-    monkeypatch.setattr("finx.cli.load_pages", no_load)
     with pytest.raises(SystemExit) as e:
         main(["pages", variant])
     assert "test split" in str(e.value)
 
 
 @pytest.mark.parametrize("split", ["test", "test_new_issuer", "test_new_period"])
-def test_test_split_eval_requires_final(split, monkeypatch):
+def test_test_split_eval_requires_final(split, monkeypatch, no_side_effects):
     def boom(*a, **k):
         raise AssertionError("gold must not be loaded without --final")
 
@@ -139,3 +147,72 @@ def test_final_eval_logs_result_and_sha_fallback(monkeypatch, tmp_path):
     assert len(lines) == 2
     assert " unknown test_new_issuer strict started" in lines[0]
     assert " unknown test_new_issuer strict " in lines[1] and lines[1].endswith('{"ok": 1}')
+
+
+def _extract_stubs(monkeypatch, tmp_path):
+    from types import SimpleNamespace as NS
+    from finx import cli
+    calls = []
+
+    def fake(path, root, cache):
+        calls.append(path)
+        rel = str(path)
+        return NS(file=rel, fields={}, to_dict=lambda: {"file": rel},
+                  profile=NS(doc_type="x", period_end="p", currency="IDR", scale=1))
+
+    monkeypatch.setattr(cli, "process", fake)
+    monkeypatch.setattr(cli, "OUT", tmp_path)
+    return calls
+
+
+def test_extract_final_files_logs_started_and_finished(monkeypatch, tmp_path):
+    calls = _extract_stubs(monkeypatch, tmp_path)
+    _, rel, _ = _test_rel()
+    main(["extract", "--files", rel, "--final"])
+    lines = (tmp_path / "test_runs.log").read_text().splitlines()
+    assert len(calls) == 1 and len(lines) == 2
+    assert lines[0].endswith(f"extract {rel} started")
+    assert lines[1].endswith("finished ok=1 failed=0")
+
+
+def test_extract_final_split_logs(monkeypatch, tmp_path):
+    from finx.config import load_split
+    _extract_stubs(monkeypatch, tmp_path)
+    monkeypatch.setattr("finx.cli.load_split", lambda: (load_split()[0], {"test_new_issuer": [], "test": []}))
+    main(["extract", "--split", "test_new_issuer", "--final"])
+    lines = (tmp_path / "test_runs.log").read_text().splitlines()
+    assert lines[0].endswith("extract test_new_issuer started")
+    assert lines[1].endswith("finished ok=0 failed=0")
+
+
+def test_extract_build_files_not_logged(monkeypatch, tmp_path):
+    _extract_stubs(monkeypatch, tmp_path)
+    _, _, build = _test_rel()
+    main(["extract", "--files", build[0]])
+    assert not (tmp_path / "test_runs.log").exists()
+
+
+def test_eval_missing_predictions_exits_friendly(no_side_effects):
+    with pytest.raises(SystemExit) as e:
+        main(["eval", "--split", "build"])
+    assert "missing predictions" in str(e.value) and "finx extract" in str(e.value)
+
+
+def test_nan_to_none_and_valid_json():
+    import json
+    from finx.cli import _nan_to_none
+    nan = float("nan")
+    out = _nan_to_none({"a": nan, "b": (nan, 1.0), "c": [{"d": nan}]})
+    assert out == {"a": None, "b": [None, 1.0], "c": [{"d": None}]}
+    assert "NaN" not in json.dumps(out)
+
+
+def test_git_sha_dirty_suffix(monkeypatch):
+    from types import SimpleNamespace as NS
+    from finx import cli
+    def run(cmd, **k):
+        return NS(returncode=0, stdout="abc123\n" if "rev-parse" in cmd else " M file\n")
+    monkeypatch.setattr(cli.subprocess, "run", run)
+    assert cli._git_sha() == "abc123-dirty"
+    monkeypatch.setattr(cli.subprocess, "run", lambda cmd, **k: NS(returncode=0, stdout="abc123\n" if "rev-parse" in cmd else ""))
+    assert cli._git_sha() == "abc123"

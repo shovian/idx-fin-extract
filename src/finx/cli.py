@@ -32,6 +32,36 @@ def _guard_file(rel: str, split: dict, root: Path) -> None:
         sys.exit(f"refusing: {rel!r} belongs to the test split (anti-leak rule E.1)")
 
 
+def _git_sha() -> str:
+    try:
+        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
+        if r.returncode != 0:
+            return "unknown"
+        sha = r.stdout.strip() or "unknown"
+        st = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+        if st.returncode != 0:
+            return "unknown"
+        return sha + "-dirty" if st.stdout.strip() and sha != "unknown" else sha
+    except Exception:
+        return "unknown"
+
+
+def _log_test_run(line: str) -> None:
+    OUT.mkdir(exist_ok=True)
+    with (OUT / "test_runs.log").open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+
+
+def _nan_to_none(x):
+    if isinstance(x, float) and x != x:
+        return None
+    if isinstance(x, dict):
+        return {k: _nan_to_none(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_nan_to_none(v) for v in x]
+    return x
+
+
 def cmd_extract(args) -> None:
     root, split = load_split()
     if args.files:
@@ -43,9 +73,22 @@ def cmd_extract(args) -> None:
         if args.split in TEST_SPLITS and not args.final:
             sys.exit("refusing to touch the test split without --final (anti-leak rule E.2)")
         rels, name = split[args.split], args.split
+    tests = [(root / t).resolve() for t in split["test"]]
+
+    def _is_test(f: str) -> bool:
+        p = (root / f).resolve()
+        return p in tests or (p.exists() and any(t.exists() and p.samefile(t) for t in tests))
+
+    touches_test = args.final or (not args.files and args.split in TEST_SPLITS) or any(
+        _is_test(f) for f in (args.files or []))
+    sha = _git_sha() if touches_test else ""
+    what = ",".join(args.files) if args.files else args.split
+    if touches_test:
+        _log_test_run(f"{datetime.datetime.now().isoformat()} {sha} extract {what} started")
     OUT.mkdir(exist_ok=True)
     out = OUT / f"{name}.jsonl"
     failed = 0
+    done = 0
     with out.open("w", encoding="utf-8") as fh:
         for rel in rels:
             try:
@@ -55,10 +98,13 @@ def cmd_extract(args) -> None:
                 print(f"ERROR {rel}: {exc}", file=sys.stderr, flush=True)
                 continue
             fh.write(json.dumps(res.to_dict(), ensure_ascii=False) + "\n")
+            done += 1
             ok = sum(f.status == "ok" for f in res.fields.values())
             print(f"{res.file}: {res.profile.doc_type} {res.profile.period_end} "
                   f"{res.profile.currency} x{res.profile.scale} ok={ok}/{len(res.fields)}", flush=True)
     print(f"wrote {out}")
+    if touches_test:
+        _log_test_run(f"{datetime.datetime.now().isoformat()} {sha} extract {what} finished ok={done} failed={failed}")
     if failed:
         sys.exit(f"{failed} document(s) failed")
 
@@ -94,20 +140,6 @@ def cmd_inspect(args) -> None:
         print(f"{row.label_left[:60]:60} | {vals:38} | {row.label_right[:38]:38} {hits if hits else ''}")
 
 
-def _git_sha() -> str:
-    try:
-        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
-        return r.stdout.strip() or "unknown" if r.returncode == 0 else "unknown"
-    except Exception:
-        return "unknown"
-
-
-def _log_test_run(line: str) -> None:
-    OUT.mkdir(exist_ok=True)
-    with (OUT / "test_runs.log").open("a", encoding="utf-8") as fh:
-        fh.write(line + "\n")
-
-
 def cmd_eval(args) -> None:
     root, split = load_split()
     is_test = args.split in TEST_SPLITS
@@ -119,7 +151,11 @@ def cmd_eval(args) -> None:
         _log_test_run(f"{datetime.datetime.now().isoformat()} {sha} {args.split} {args.policy} started")
     else:
         gold_path = Path("gold/build_gold.csv")
-    preds = [json.loads(line) for line in (OUT / f"{args.split}.jsonl").open(encoding="utf-8") if line.strip()]
+    pred_path = OUT / f"{args.split}.jsonl"
+    if not pred_path.exists():
+        sys.exit(f"missing predictions: {pred_path} — run finx extract first")
+    with pred_path.open(encoding="utf-8") as fh:
+        preds = [json.loads(line) for line in fh if line.strip()]
     gold = load_gold(gold_path)
     if args.split == "test":
         slices = {k: split[k] for k in ("test_new_issuer", "test_new_period")}
@@ -128,8 +164,8 @@ def cmd_eval(args) -> None:
     summary = evaluate(preds, gold, slices, policy=args.policy, out_dir=OUT)
     if is_test:
         _log_test_run(f"{datetime.datetime.now().isoformat()} {sha} {args.split} {args.policy} "
-                      f"{json.dumps(summary)}")
-    print(json.dumps(summary, indent=2))
+                      f"{json.dumps(_nan_to_none(summary))}")
+    print(json.dumps(_nan_to_none(summary), indent=2))
 
 
 def cmd_metrics(args) -> None:
