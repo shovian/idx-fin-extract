@@ -18,8 +18,11 @@ SPLITS = ("build", "test", "test_new_issuer", "test_new_period")
 TEST_SPLITS = {"test", "test_new_issuer", "test_new_period"}
 
 
-def _guard_file(rel: str, split: dict) -> None:
-    if rel in split["test"]:
+def _guard_file(rel: str, split: dict, root: Path) -> None:
+    target = (root / rel).resolve()
+    if not target.is_relative_to(root.resolve()):
+        sys.exit(f"refusing: {rel!r} resolves outside the data root")
+    if target in {(root / t).resolve() for t in split["test"]}:
         sys.exit(f"refusing: {rel!r} belongs to the test split (anti-leak rule E.1)")
 
 
@@ -28,7 +31,7 @@ def cmd_extract(args) -> None:
     if args.files:
         if not args.final:
             for f in args.files:
-                _guard_file(f, split)
+                _guard_file(f, split, root)
         rels, name = args.files, "adhoc"
     else:
         if args.split in TEST_SPLITS and not args.final:
@@ -36,19 +39,27 @@ def cmd_extract(args) -> None:
         rels, name = split[args.split], args.split
     OUT.mkdir(exist_ok=True)
     out = OUT / f"{name}.jsonl"
+    failed = 0
     with out.open("w", encoding="utf-8") as fh:
         for rel in rels:
-            res = process(root / rel, root, CACHE)
+            try:
+                res = process(root / rel, root, CACHE)
+            except Exception as exc:
+                failed += 1
+                print(f"ERROR {rel}: {exc}", file=sys.stderr, flush=True)
+                continue
             fh.write(json.dumps(res.to_dict(), ensure_ascii=False) + "\n")
             ok = sum(f.status == "ok" for f in res.fields.values())
             print(f"{res.file}: {res.profile.doc_type} {res.profile.period_end} "
                   f"{res.profile.currency} x{res.profile.scale} ok={ok}/{len(res.fields)}", flush=True)
     print(f"wrote {out}")
+    if failed:
+        sys.exit(f"{failed} document(s) failed")
 
 
 def cmd_pages(args) -> None:
     root, split = load_split()
-    _guard_file(args.file, split)
+    _guard_file(args.file, split, root)
     pages = load_pages(root / args.file, CACHE)
     for kind in ("BS", "IS", "CF"):
         top = sorted(((score_page(p, kind), p.number) for p in pages), reverse=True)[:5]
@@ -58,11 +69,14 @@ def cmd_pages(args) -> None:
 
 def cmd_inspect(args) -> None:
     root, split = load_split()
-    _guard_file(args.file, split)
+    _guard_file(args.file, split, root)
     pages = load_pages(root / args.file, CACHE)
-    page = pages[args.page - 1]
+    by_no = {p.number: p for p in pages}
+    if args.page not in by_no:
+        sys.exit(f"error: --page {args.page} out of range (1..{len(pages)})")
+    page = by_no[args.page]
     blocks = locate(pages)
-    stmt = [pages[n - 1] for k in blocks for n in blocks[k]] or [page]
+    stmt = [by_no[n] for k in blocks for n in blocks[k]] or [page]
     locale = detect_locale([w.text for p in stmt for w in p.words])
     print(f"locale={locale} blocks={blocks}")
     for kind in ("BS", "IS", "CF"):
