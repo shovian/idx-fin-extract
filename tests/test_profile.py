@@ -24,6 +24,7 @@ def test_find_period_end(text, exp):
     ("(Disajikan dalam Rupiah, kecuali dinyatakan lain)", 1, "IDR"),
     ("(Dinyatakan dalam Dollar Amerika Serikat)", 1, "USD"),
     ("Catatan/ Notes 2024 2023 US$ '000 US$ '000", 1_000, "USD"),
+    ("(Dalam USD Penuh, kecuali dinyatakan lain) (In Full USD, unless otherwise stated)", 1, "USD"),
 ])
 def test_scale_and_currency(text, scale, cur):
     assert find_scale(text) == scale

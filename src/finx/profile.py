@@ -47,7 +47,7 @@ def find_scale(text: str) -> int | None:
         return 1_000_000
     if re.search(r"\bribu(an)?\b|thousands?\b|[’']000", t):
         return 1_000
-    if re.search(r"\b(disajikan|dinyatakan|expressed|presented|dalam|in)\b[^()]{0,30}\b(rupiah|dolar|dollars?)", t):
+    if re.search(r"\b(disajikan|dinyatakan|expressed|presented|dalam|in)\b[^()]{0,30}\b(rupiah|dolar|dollars?|usd|idr)\b", t):
         return 1
     return None
 
