@@ -1,6 +1,7 @@
 import gzip
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pymupdf
@@ -21,20 +22,26 @@ def extract_pages(pdf_path: Path) -> list[Page]:
 
 
 def _cache_file(pdf_path: Path, cache_dir: Path) -> Path:
-    # ponytail: keyed by absolute path only; delete .cache/ if a PDF is replaced in place
-    key = hashlib.sha1(str(Path(pdf_path).resolve()).encode()).hexdigest()[:16]
+    # key = resolved path + size + mtime, so a PDF replaced in place gets a fresh cache entry
+    p = Path(pdf_path).resolve()
+    st = p.stat()
+    key = hashlib.sha1(f"{p}|{st.st_size}|{st.st_mtime_ns}".encode()).hexdigest()[:16]
     return cache_dir / f"{key}.json.gz"
 
 
 def load_pages(pdf_path: Path, cache_dir: Path) -> list[Page]:
     cf = _cache_file(pdf_path, cache_dir)
     if cf.exists():
-        with gzip.open(cf, "rt", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return [Page(d["n"], d["w"], d["h"], [Word(*x) for x in d["words"]]) for d in data]
+        try:
+            with gzip.open(cf, "rt", encoding="utf-8") as fh:
+                data = json.load(fh)
+            return [Page(d["n"], d["w"], d["h"], [Word(*x) for x in d["words"]]) for d in data]
+        except (EOFError, OSError, json.JSONDecodeError):
+            pass  # corrupt cache: treat as miss and re-extract
     pages = extract_pages(pdf_path)
     cf.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.open(cf, "wt", encoding="utf-8") as fh:
+    tmp = cf.with_name(f"{cf.name}.{os.getpid()}.tmp")
+    with gzip.open(tmp, "wt", encoding="utf-8") as fh:
         json.dump(
             [
                 {"n": p.number, "w": p.width, "h": p.height,
@@ -43,4 +50,5 @@ def load_pages(pdf_path: Path, cache_dir: Path) -> list[Page]:
             ],
             fh,
         )
+    os.replace(tmp, cf)
     return pages
