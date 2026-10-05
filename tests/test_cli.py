@@ -90,7 +90,52 @@ def test_guard_refuses_case_variant(monkeypatch):
     assert "test split" in str(e.value)
 
 
-def test_test_split_eval_requires_final():
+@pytest.mark.parametrize("split", ["test", "test_new_issuer", "test_new_period"])
+def test_test_split_eval_requires_final(split, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("gold must not be loaded without --final")
+
+    monkeypatch.setattr("finx.cli.load_gold", boom)
     with pytest.raises(SystemExit) as e:
-        main(["eval", "--split", "test_new_issuer"])
+        main(["eval", "--split", split])
     assert "--final" in str(e.value)
+
+
+def _final_setup(monkeypatch, tmp_path):
+    monkeypatch.setattr("finx.cli.OUT", tmp_path)
+    monkeypatch.setattr("finx.cli.HELDOUT_GOLD", tmp_path / "fake_gold.csv")
+    (tmp_path / "test_new_issuer.jsonl").write_text("{}\n")
+
+    def fake_gold(path):
+        assert path == tmp_path / "fake_gold.csv"
+        return []
+
+    monkeypatch.setattr("finx.cli.load_gold", fake_gold)
+
+
+def test_final_eval_logs_started_before_evaluation(monkeypatch, tmp_path):
+    _final_setup(monkeypatch, tmp_path)
+
+    def bad_eval(*a, **k):
+        raise RuntimeError("eval died")
+
+    monkeypatch.setattr("finx.cli.evaluate", bad_eval)
+    with pytest.raises(RuntimeError):
+        main(["eval", "--split", "test_new_issuer", "--final"])
+    lines = (tmp_path / "test_runs.log").read_text().splitlines()
+    assert len(lines) == 1 and lines[0].endswith("test_new_issuer strict started")
+
+
+def test_final_eval_logs_result_and_sha_fallback(monkeypatch, tmp_path):
+    _final_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr("finx.cli.evaluate", lambda *a, **k: {"ok": 1})
+
+    def no_git(*a, **k):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr("finx.cli.subprocess.run", no_git)
+    main(["eval", "--split", "test_new_issuer", "--final"])
+    lines = (tmp_path / "test_runs.log").read_text().splitlines()
+    assert len(lines) == 2
+    assert " unknown test_new_issuer strict started" in lines[0]
+    assert " unknown test_new_issuer strict " in lines[1] and lines[1].endswith('{"ok": 1}')

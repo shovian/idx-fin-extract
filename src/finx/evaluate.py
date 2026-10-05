@@ -152,6 +152,8 @@ def evaluate(preds: list[dict], gold: list[dict], slices: dict[str, list[str]],
             wv = sum(1 for i in fi if i["gold"] != "NA")
             lines.append(f"| {f} | {len(fi)} | {cc['correct']} | {cc['wrong']} | {cc['missed']} | "
                          f"{cc['correct_abstain']} | {_ratio(cc['correct'], ans)} | {_ratio(cc['correct'], wv)} |")
+        lines += ["", "Page fields (bs/is/cf_page): correct = gold page contained in predicted block "
+                  "(containment, not exact start page)."]
         kinds = Counter(i["kind"] for i in its if i["verdict"] == "wrong" and i["kind"])
         lines += ["", f"Error kinds (numeric wrong): {dict(kinds)}", "", "### Wrong", ""]
         lines += [f"- `{i['file']}` · {i['field']}: gold={i['gold']} pred={i['pred']} {i['kind']}"

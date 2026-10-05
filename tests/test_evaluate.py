@@ -41,6 +41,17 @@ def test_cluster_bootstrap_degenerate():
     assert cluster_bootstrap(items, "ticker", lambda s: 1.0) == (1.0, 1.0)
 
 
+def test_cluster_bootstrap_resamples_by_ticker():
+    def prec(s):
+        return sum(i["verdict"] == "correct" for i in s) / len(s)
+
+    items = [{"ticker": "A", "verdict": "correct"} for _ in range(50)] + [{"ticker": "B", "verdict": "wrong"}]
+    # item-level mean is 50/51 ~ 0.98; resampling tickers {A,B} gives 0, 50/51 or 1
+    lo, hi = cluster_bootstrap(items, "ticker", prec)
+    assert lo == 0.0 and hi == 1.0
+    assert (lo, hi) == cluster_bootstrap(items, "ticker", prec)
+
+
 def _pred():
     return {"file": "X/a.pdf", "ticker": "X", "pages": {"BS": [4], "IS": [5], "CF": [6]},
             "profile": {"doc_type": "FS", "period_end": "2024-12-31", "currency": "USD", "scale": 1000,

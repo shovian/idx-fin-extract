@@ -93,12 +93,29 @@ def cmd_inspect(args) -> None:
         print(f"{row.label_left[:60]:60} | {vals:38} | {row.label_right[:38]:38} {hits if hits else ''}")
 
 
+def _git_sha() -> str:
+    try:
+        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
+        return r.stdout.strip() or "unknown" if r.returncode == 0 else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _log_test_run(line: str) -> None:
+    OUT.mkdir(exist_ok=True)
+    with (OUT / "test_runs.log").open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+
+
 def cmd_eval(args) -> None:
     root, split = load_split()
-    if args.split in TEST_SPLITS:
+    is_test = args.split in TEST_SPLITS
+    if is_test:
         if not args.final:
             sys.exit("refusing: evaluating the test split needs --final (anti-leak rule E.6)")
         gold_path = HELDOUT_GOLD
+        sha = _git_sha()
+        _log_test_run(f"{datetime.datetime.now().isoformat()} {sha} {args.split} {args.policy} started")
     else:
         gold_path = Path("gold/build_gold.csv")
     preds = [json.loads(line) for line in (OUT / f"{args.split}.jsonl").open(encoding="utf-8") if line.strip()]
@@ -108,11 +125,9 @@ def cmd_eval(args) -> None:
     else:
         slices = {args.split: split[args.split]}
     summary = evaluate(preds, gold, slices, policy=args.policy, out_dir=OUT)
-    if args.split in TEST_SPLITS:
-        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
-        with (OUT / "test_runs.log").open("a", encoding="utf-8") as fh:
-            fh.write(f"{datetime.datetime.now().isoformat()} {sha} {args.split} {args.policy} "
-                     f"{json.dumps(summary)}\n")
+    if is_test:
+        _log_test_run(f"{datetime.datetime.now().isoformat()} {sha} {args.split} {args.policy} "
+                      f"{json.dumps(summary)}")
     print(json.dumps(summary, indent=2))
 
 
