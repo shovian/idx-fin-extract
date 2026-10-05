@@ -91,3 +91,40 @@ def test_merge_spaced_joins_letter_spaced_words_only():
     ws = [Word(0, 0, 5, 8, "2"), Word(8, 0, 13, 8, "0"), Word(16, 0, 21, 8, "2"), Word(24, 0, 29, 8, "4"),
           Word(60, 0, 65, 8, "6"), Word(90, 0, 120, 8, "Kas")]
     assert [w.text for w in merge_spaced(ws, 9.0)] == ["2024", "6", "Kas"]
+
+
+def test_header_dates_next_to_value_column_do_not_hide_it():
+    # interim BS header: day numbers ("31", "31,") printed just left/right of the current-period column
+    words = L(40, 60, "Maret/ Desember/") + [R(288.8, 60, "31"), R(333.8, 60, "31")]
+    words += [R(307.4, 66, "2"), R(309.6, 72, "31,")]
+    lines = [
+        (100, "Utang obligasi dan wesel bayar", "132.710", "218.195", "Bonds and notes payable"),
+        (112, "Liabilitas keuangan derivatif", "4.105", "12.896", "Derivative financial liabilities"),
+        (124, "Jumlah Liabilitas Jangka Pendek", "1.005.727", "1.433.953", "Total Current Liabilities"),
+        (136, "Liabilitas pajak tangguhan - bersih", "778.418", "799.936", "Deferred tax liabilities - net"),
+        (148, "(Kerugian) penghasilan komprehensif lain", "(14.964)", "(3.556)", "Other comprehensive (loss) income"),
+        (160, "JUMLAH LIABILITAS", "6.536.878", "6.344.579", "TOTAL LIABILITIES"),
+    ]
+    for y, lab, cur, pri, en in lines:
+        words += L(76, y, lab)
+        words += [R(258.9, y, "20"), R(316.2 if cur[0] != "(" else 318.9, y, cur)]
+        words += [R(366.6 if pri[0] != "(" else 369.3, y, pri)]
+        words += L(388, y, en)
+    rows = build_rows(Page(1, 612, 792, words), "id")
+    total = next(r for r in rows if r.label_left.startswith("Jumlah Liabilitas Jangka"))
+    assert total.values == {0: 1005727.0, 1: 1433953.0}
+    assert next(r for r in rows if r.label_left == "JUMLAH LIABILITAS").values == {0: 6536878.0, 1: 6344579.0}
+
+
+def test_scattered_label_figures_do_not_become_a_column_after_trimming():
+    # allowance amounts wrapped inside labels ("nilai sebesar US$ 10.845.097") end at drifting x positions
+    words = []
+    figs = ["10.845.097", "12.082.488", "47.677", "52.561", "881.824", "2.933.276", "26.900", "90.688",
+            "11.201.098", "48.651", "563.886", "88.197"]
+    for i, fig in enumerate(figs):
+        y = 100 + 24 * i
+        words += L(40, y, "nilai sebesar US$") + [R(120 + 3.5 * i, y, fig)]
+        words += L(40, y + 12, "Persediaan") + [R(400, y + 12, f"{i + 1}1.829"), R(480, y + 12, f"{i + 1}2.509")]
+    rows = build_rows(Page(1, 595, 842, words), "id")
+    assert all(not r.values for r in rows if r.label_left.startswith("nilai sebesar"))
+    assert rows[1].values == {0: 11829.0, 1: 12509.0}

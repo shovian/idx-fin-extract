@@ -7,6 +7,7 @@ from finx.numbers import DASHES, NOTE_REF, parse_number
 
 _YEAR = re.compile(r"(19|20)\d{2}")
 CARRY_X_TOL = 25.0  # a wrapped label line starts within this many points of the line it continues
+CORE_SHARE = 0.8  # a wide numeric chain is a real column plus strays only if its core holds >= 80% of it
 
 
 @dataclass
@@ -113,6 +114,15 @@ def find_columns(rows: list[list[Word]], locale: str, page_width: float):
     max_spread = 0.04 * page_width  # right-aligned amounts share x1; wide chains are numbers inside labels
     values, notes = [], []
     for c in clusters:
+        if c[-1][0] - c[0][0] > max_spread:
+            # stray numbers (header day numbers, label figures) can chain onto a real column;
+            # keep the core around the median right edge if it holds nearly the whole chain;
+            # scattered figures inside labels have no such core
+            mid = c[len(c) // 2][0]
+            core = [p for p in c if abs(p[0] - mid) <= max_spread / 2]
+            if len(core) < CORE_SHARE * len(c):
+                continue
+            c = core
         if len(c) < min_count or c[-1][0] - c[0][0] > max_spread:
             continue
         span = (c[0][0] - 2.0, c[-1][0] + 2.0)
