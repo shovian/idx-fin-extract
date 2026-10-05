@@ -1,10 +1,14 @@
 import argparse
+import datetime
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 from finx.config import load_split
+from finx.evaluate import evaluate
 from finx.fields import RULES, match_rule
+from finx.gold import load_gold
 from finx.layout import build_rows
 from finx.numbers import detect_locale
 from finx.pages import locate, score_page
@@ -89,6 +93,29 @@ def cmd_inspect(args) -> None:
         print(f"{row.label_left[:60]:60} | {vals:38} | {row.label_right[:38]:38} {hits if hits else ''}")
 
 
+def cmd_eval(args) -> None:
+    root, split = load_split()
+    if args.split in TEST_SPLITS:
+        if not args.final:
+            sys.exit("refusing: evaluating the test split needs --final (anti-leak rule E.6)")
+        gold_path = HELDOUT_GOLD
+    else:
+        gold_path = Path("gold/build_gold.csv")
+    preds = [json.loads(line) for line in (OUT / f"{args.split}.jsonl").open(encoding="utf-8") if line.strip()]
+    gold = load_gold(gold_path)
+    if args.split == "test":
+        slices = {k: split[k] for k in ("test_new_issuer", "test_new_period")}
+    else:
+        slices = {args.split: split[args.split]}
+    summary = evaluate(preds, gold, slices, policy=args.policy, out_dir=OUT)
+    if args.split in TEST_SPLITS:
+        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+        with (OUT / "test_runs.log").open("a", encoding="utf-8") as fh:
+            fh.write(f"{datetime.datetime.now().isoformat()} {sha} {args.split} {args.policy} "
+                     f"{json.dumps(summary)}\n")
+    print(json.dumps(summary, indent=2))
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="finx")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -107,6 +134,12 @@ def main(argv=None) -> None:
     sp.add_argument("file")
     sp.add_argument("--page", type=int, required=True)
     sp.set_defaults(fn=cmd_inspect)
+
+    sp = sub.add_parser("eval", help="score predictions against gold labels")
+    sp.add_argument("--split", default="build", choices=SPLITS)
+    sp.add_argument("--policy", default="strict", choices=("strict", "lenient"))
+    sp.add_argument("--final", action="store_true")
+    sp.set_defaults(fn=cmd_eval)
 
     args = ap.parse_args(argv)
     args.fn(args)

@@ -88,3 +88,9 @@ def test_guard_refuses_case_variant(monkeypatch):
     with pytest.raises(SystemExit) as e:
         main(["pages", variant])
     assert "test split" in str(e.value)
+
+
+def test_test_split_eval_requires_final():
+    with pytest.raises(SystemExit) as e:
+        main(["eval", "--split", "test_new_issuer"])
+    assert "--final" in str(e.value)
