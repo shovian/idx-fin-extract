@@ -45,8 +45,9 @@ RULES: list[FieldRule] = [
               bank_patterns=(r"^pendapatan bunga( dan syariah)? (bersih|neto)$",
                              r"^net interest( and sharia)? income$")),
     FieldRule("net_income_parent", "IS", (_PARENT,),
-              exclude=(r"^total (ekuitas|equity)", r"komprehensif|comprehensive")),
-    FieldRule("eps_basic", "IS", (r"(per saham|per share)",), exclude=(r"nilai nominal|par value",), look_ahead=3),
+              exclude=(r"^total (ekuitas|equity)", r"komprehensif|comprehensive", r"per saham|per share")),
+    FieldRule("eps_basic", "IS", (r"(per saham|per share)",), exclude=(r"nilai nominal|par value", r"dividen|dividend",
+                                             r"^(?!.*\b(dasar|basic)\b).*\b(dilusian|diluted)\b"), look_ahead=3),
     FieldRule("cfo", "CF", (r"(kas bersih|kas neto|net cash).*(aktivitas operasi|operating activities)",)),
 ]
 
