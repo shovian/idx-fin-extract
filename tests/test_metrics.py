@@ -62,7 +62,8 @@ def test_ratios_usd_reporter_uses_fx():
 def test_negative_equity_and_loss_give_none():
     d = doc("Z", "2024-12-31", 12, total_liabilities=(600, None), total_equity=(-10, None),
             equity_parent=(-10, None), net_income_parent=(-5, None), eps_basic=(-1, None))
-    r = ratios(panel([d]), "Z", "2024-12-31", price=100, usd_idr=None)
+    r0 = ratios(panel([d]), "Z", "2024-12-31", price=100, usd_idr=None)
+    assert r0["fair_value"] is None
     r = ratios(panel([d]), "Z", "2024-12-31", price=100, usd_idr=None, avg_per=10.0)
     assert r["der"] is None and r["per"] is None and r["pbv"] is None and r["fair_value"] is None
 
@@ -121,3 +122,41 @@ def test_report_writes_csvs(tmp_path):
     assert float(rows[0]["avg_per"]) == 100.0 and rows[0]["avg_per_days"] == "30"
     assert float(rows[0]["fair_value"]) == pytest.approx(1000.0)  # EPS 10 x avg PER 100
     assert (tmp_path / "panel.csv").exists() and (tmp_path / "quality_flags.csv").exists()
+
+
+def test_ttm_and_quarter_refuse_mixed_currency():
+    best = panel([doc("X", "2024-12-31", 12, cur="IDR", net_income_parent=(100, 80)),
+                  doc("X", "2025-06-30", 6, cur="USD", net_income_parent=(60, 40))])
+    assert ttm(best, "X", "2025-06-30", "net_income_parent") == (None, "missing")
+    best = panel([doc("X", "2025-03-31", 3, cur="IDR", revenue=(30, None)),
+                  doc("X", "2025-06-30", 6, cur="USD", revenue=(70, None))])
+    assert quarter(best, "X", "2025-06-30", "revenue") is None
+
+
+def test_unknown_currency_gives_no_valuation_and_skips_days():
+    d = doc("E", "2024-12-31", 12, cur="EUR", equity_parent=(1000, None),
+            net_income_parent=(100, None), eps_basic=(10, None))
+    r = ratios(panel([d]), "E", "2024-12-31", price=100, usd_idr=16000, avg_per=10.0)
+    assert r["per"] is None and r["pbv"] is None and r["fair_value"] is None
+    assert average_per(panel([d]), "E", _daily("2025-01-01", 30, 100.0), [("2024-12-31", 16000.0)],
+                       "2025-02-28") == (None, 0)
+
+
+def test_annualized_eps_gives_no_fair_value_and_is_excluded_from_avg_per():
+    d = doc("A", "2025-03-31", 3, eps_basic=(10, None), net_income_parent=(100, None))
+    best = panel([d])
+    r = ratios(best, "A", "2025-03-31", price=1000, usd_idr=None, avg_per=10.0)
+    assert r["eps_basis"] == "annualized" and r["per"] == pytest.approx(25.0)
+    assert r["fair_value"] is None
+    assert average_per(best, "A", _daily("2025-04-01", 30, 1000.0), [], "2025-05-31") == (None, 0)
+
+
+def test_bvps_basis():
+    base = dict(equity_parent=(1000, None), net_income_parent=(100, None), eps_basic=(10, None))
+    d = doc("B", "2024-12-31", 12, shares_issued=(50, None), **base)
+    assert ratios(panel([d]), "B", "2024-12-31")["bvps_basis"] == "issued"
+    d = doc("B", "2024-12-31", 12, **base)
+    r = ratios(panel([d]), "B", "2024-12-31")
+    assert r["bvps_basis"] == "ni_eps" and r["bvps"] == 100
+    d = doc("B", "2024-12-31", 12, net_income_parent=(100, None))
+    assert ratios(panel([d]), "B", "2024-12-31")["bvps_basis"] is None

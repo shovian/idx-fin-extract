@@ -47,7 +47,10 @@ def ttm(best, ticker, period_end, field):
         return None, "missing"
     if months == 12:
         return cur, "fy"
-    fy_prev = full(best.get((ticker, f"{int(period_end[:4]) - 1}-12-31")), field)
+    fy_doc = best.get((ticker, f"{int(period_end[:4]) - 1}-12-31"))
+    if fy_doc and fy_doc["profile"]["currency"] != d["profile"]["currency"]:
+        return None, "missing"  # never mix currencies across docs
+    fy_prev = full(fy_doc, field)
     prev_same = prior_full(d, field)  # interim comparative column = same YTD period last year
     if fy_prev is not None and prev_same is not None:
         return fy_prev - prev_same + cur, "ttm"
@@ -55,24 +58,33 @@ def ttm(best, ticker, period_end, field):
 
 
 def quarter(best, ticker, period_end, field):
-    cur = full(best.get((ticker, period_end)), field)
+    d = best.get((ticker, period_end))
+    cur = full(d, field)
     if cur is None:
         return None
     y, m = int(period_end[:4]), int(period_end[5:7])
     if m == 3:
         return cur
     prev = {6: f"{y}-03-31", 9: f"{y}-06-30", 12: f"{y}-09-30"}.get(m)
-    pv = full(best.get((ticker, prev)), field) if prev else None
+    pd_ = best.get((ticker, prev)) if prev else None
+    if pd_ and pd_["profile"]["currency"] != d["profile"]["currency"]:
+        return None
+    pv = full(pd_, field)
     return None if pv is None else cur - pv
 
 
+def _rate(cur, usd_idr):
+    return 1.0 if cur == "IDR" else usd_idr if cur == "USD" else None
+
+
 def shares(doc):
+    """Return (share_count, basis): basis is "issued", "ni_eps" or None."""
     sh = doc["fields"].get("shares_issued")
     if sh and sh.get("status") == "ok" and sh.get("raw"):
-        return sh["raw"]
+        return sh["raw"], "issued"
     ni, eps = full(doc, "net_income_parent"), full(doc, "eps_basic")
     # ponytail: NI/EPS is the weighted-average count, not period-end; parse equity notes if BVPS precision matters
-    return ni / eps if ni and eps else None
+    return (ni / eps, "ni_eps") if ni and eps else (None, None)
 
 
 def average_per(best, ticker, prices, fx, asof: str, years: int = 5, min_points: int = 20):
@@ -83,8 +95,12 @@ def average_per(best, ticker, prices, fx, asof: str, years: int = 5, min_points:
     Returns (mean_per, n_days); mean_per is None when fewer than min_points days qualify.
     """
     # ponytail: EPS is treated as known on period_end; real filings land ~1-3 months later
-    periods = sorted((pe, best[(t, pe)]["profile"]["currency"], ttm(best, t, pe, "eps_basic")[0])
-                     for t, pe in best if t == ticker)
+    # ponytail: annualized EPS is a rough extrapolation; skip those days rather than distort the mean
+    periods = []
+    for t, pe in sorted(best):
+        if t == ticker:
+            e, basis = ttm(best, t, pe, "eps_basic")
+            periods.append((pe, best[(t, pe)]["profile"]["currency"], None if basis == "annualized" else e))
     start = f"{int(asof[:4]) - years}{asof[4:]}"
     pers = []
     for day, close in prices:
@@ -94,7 +110,7 @@ def average_per(best, ticker, prices, fx, asof: str, years: int = 5, min_points:
         if not known:
             continue
         _, cur, eps = known[-1]
-        rate = 1.0 if cur == "IDR" else last_on_or_before(fx, day)
+        rate = _rate(cur, last_on_or_before(fx, day))
         if eps and eps > 0 and rate:
             pers.append(close / (eps * rate))
     if len(pers) < min_points:
@@ -108,19 +124,20 @@ def ratios(best, ticker, period_end, price=None, usd_idr=None, avg_per=None) -> 
     ca, cl = full(d, "current_assets"), full(d, "current_liabilities")
     ep = full(d, "equity_parent")
     eps_ttm, basis = ttm(best, ticker, period_end, "eps_basic")
-    n = shares(d)
+    n, n_basis = shares(d)
     bvps = ep / n if ep is not None and n else None
-    rate = 1.0 if d["profile"]["currency"] == "IDR" else usd_idr
+    rate = _rate(d["profile"]["currency"], usd_idr)
     out = {"der": tl / te if tl is not None and te and te > 0 else None,
            "current_ratio": ca / cl if ca is not None and cl else None,
-           "eps_ttm": eps_ttm, "eps_basis": basis, "bvps": bvps,
+           "eps_ttm": eps_ttm, "eps_basis": basis, "bvps": bvps, "bvps_basis": n_basis if bvps is not None else None,
            "per": None, "pbv": None, "fair_value": None}
     if rate:
         if price and eps_ttm and eps_ttm > 0:
             out["per"] = price / (eps_ttm * rate)
         if price and bvps and bvps > 0:
             out["pbv"] = price / (bvps * rate)
-        if avg_per and eps_ttm and eps_ttm > 0:
+        # ponytail: no FVP from annualized EPS; a partial-year run-rate is too unreliable to value on
+        if avg_per and basis != "annualized" and eps_ttm and eps_ttm > 0:
             out["fair_value"] = eps_ttm * rate * avg_per  # FVP = EPS TTM x average historical PER
     return out
 
