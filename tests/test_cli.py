@@ -1,6 +1,7 @@
 import pytest
 
 from finx.cli import main
+from finx.config import load_split
 
 
 @pytest.fixture
@@ -56,6 +57,7 @@ def test_guard_refuses_path_outside_root(no_side_effects):
     assert "outside" in str(e.value)
 
 
+@pytest.mark.skipif(not load_split()[0].exists(), reason="PDF folder not present")
 def test_inspect_rejects_page_zero():
     _, _, build = _test_rel()
     with pytest.raises(SystemExit) as e:
