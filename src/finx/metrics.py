@@ -87,7 +87,32 @@ def shares(doc):
     return (ni / eps, "ni_eps") if ni and eps else (None, None)
 
 
-def average_per(best, ticker, prices, fx, asof: str, years: int = 5, min_points: int = 20):
+ADJ_TYPES = {"SPLIT", "REVERSE_SPLIT", "BONUS", "STOCK_DIVIDEND", "RIGHTS"}
+
+
+def read_corp_actions(path: Path) -> dict[str, list[tuple[str, float]]]:
+    out: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    with Path(path).open(newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            if r["action_type"] in ADJ_TYPES and r.get("adj_factor") and r.get("conflict", "0") != "1":
+                out[r["ticker"]].append((r["ex_date"], float(r["adj_factor"])))
+    for v in out.values():
+        v.sort()
+    return dict(out)
+
+
+def split_factor(actions, period_end: str, day: str) -> float:
+    """Multiplier turning a per-share value reported for period_end into the share basis traded on `day`."""
+    # ponytail: assumes a report's EPS is on the pre-action basis when period_end < ex_date; PSAK 56 restates
+    # reports authorised after the action, which this double-adjusts — check filing dates if that case appears
+    f = 1.0
+    for ex, a in actions or ():
+        if period_end < ex <= day:
+            f *= a
+    return f
+
+
+def average_per(best, ticker, prices, fx, asof: str, years: int = 5, min_points: int = 20, actions=None):
     """Mean historical PER over daily closes in (asof - years, asof].
 
     Each day's PER = close_IDR / (EPS_TTM x USD/IDR that day), using the EPS TTM of the latest
@@ -109,16 +134,16 @@ def average_per(best, ticker, prices, fx, asof: str, years: int = 5, min_points:
         known = [p for p in periods if p[0] <= day]
         if not known:
             continue
-        _, cur, eps = known[-1]
+        pe, cur, eps = known[-1]
         rate = _rate(cur, last_on_or_before(fx, day))
         if eps and eps > 0 and rate:
-            pers.append(close / (eps * rate))
+            pers.append(close / (eps * split_factor(actions, pe, day) * rate))
     if len(pers) < min_points:
         return None, len(pers)
     return sum(pers) / len(pers), len(pers)
 
 
-def ratios(best, ticker, period_end, price=None, usd_idr=None, avg_per=None) -> dict:
+def ratios(best, ticker, period_end, price=None, usd_idr=None, avg_per=None, factor: float = 1.0) -> dict:
     d = best[(ticker, period_end)]
     tl, te = full(d, "total_liabilities"), full(d, "total_equity")
     ca, cl = full(d, "current_assets"), full(d, "current_liabilities")
@@ -130,15 +155,15 @@ def ratios(best, ticker, period_end, price=None, usd_idr=None, avg_per=None) -> 
     out = {"der": tl / te if tl is not None and te and te > 0 else None,
            "current_ratio": ca / cl if ca is not None and cl else None,
            "eps_ttm": eps_ttm, "eps_basis": basis, "bvps": bvps, "bvps_basis": n_basis if bvps is not None else None,
-           "per": None, "pbv": None, "fair_value": None}
+           "split_factor": factor, "per": None, "pbv": None, "fair_value": None}
     if rate:
         if price and eps_ttm and eps_ttm > 0:
-            out["per"] = price / (eps_ttm * rate)
+            out["per"] = price / (eps_ttm * factor * rate)
         if price and bvps and bvps > 0:
-            out["pbv"] = price / (bvps * rate)
+            out["pbv"] = price / (bvps * factor * rate)
         # ponytail: no FVP from annualized EPS; a partial-year run-rate is too unreliable to value on
         if avg_per and basis != "annualized" and eps_ttm and eps_ttm > 0:
-            out["fair_value"] = eps_ttm * rate * avg_per  # FVP = EPS TTM x average historical PER
+            out["fair_value"] = eps_ttm * factor * rate * avg_per  # FVP = EPS TTM x average historical PER
     return out
 
 
@@ -193,7 +218,7 @@ def _write(path: Path, rows: list[dict]) -> None:
             w.writerows(rows)
 
 
-def report(docs, prices, fx, asof: str, out_dir: Path, per_years: int = 5) -> None:
+def report(docs, prices, fx, asof: str, out_dir: Path, per_years: int = 5, actions=None) -> None:
     best = panel(docs)
     out_dir.mkdir(parents=True, exist_ok=True)
     prow = []
@@ -216,8 +241,9 @@ def report(docs, prices, fx, asof: str, out_dir: Path, per_years: int = 5) -> No
         row = {"ticker": t, "period_end": pe, "currency": best[(t, pe)]["profile"]["currency"], "price": price}
         for f in ("revenue", "net_income_parent", "cfo"):
             row[f"{f}_ttm"], row[f"{f}_basis"] = ttm(best, t, pe, f)
-        row["avg_per"], row["avg_per_days"] = average_per(best, t, prices.get(t, []), fx, asof, per_years)
-        row.update(ratios(best, t, pe, price, usd_idr, row["avg_per"]))
+        acts = (actions or {}).get(t)
+        row["avg_per"], row["avg_per_days"] = average_per(best, t, prices.get(t, []), fx, asof, per_years, actions=acts)
+        row.update(ratios(best, t, pe, price, usd_idr, row["avg_per"], factor=split_factor(acts, pe, asof)))
         mrows.append(row)
     _write(out_dir / "metrics.csv", mrows)
     _write(out_dir / "quality_flags.csv", quality_flags(best))

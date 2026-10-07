@@ -10,7 +10,7 @@ from finx.evaluate import evaluate
 from finx.fields import RULES, match_rule
 from finx.gold import load_gold
 from finx.layout import build_rows
-from finx.metrics import read_fx, read_prices, report
+from finx.metrics import read_corp_actions, read_fx, read_prices, report
 from finx.numbers import detect_locale
 from finx.pages import locate, score_page
 from finx.pdftext import load_pages
@@ -172,7 +172,8 @@ def cmd_metrics(args) -> None:
     docs = [json.loads(line) for p in args.pred for line in Path(p).open(encoding="utf-8") if line.strip()]
     prices = read_prices(Path(args.prices)) if args.prices else {}
     fx = read_fx(Path(args.fx)) if args.fx else []
-    report(docs, prices, fx, args.asof, OUT, per_years=args.per_years)
+    actions = read_corp_actions(Path(args.corp_actions)) if args.corp_actions else None
+    report(docs, prices, fx, args.asof, OUT, per_years=args.per_years, actions=actions)
     print(f"wrote {OUT / 'panel.csv'}, {OUT / 'metrics.csv'}, {OUT / 'quality_flags.csv'}")
 
 
@@ -207,6 +208,7 @@ def main(argv=None) -> None:
     sp.add_argument("--fx")
     sp.add_argument("--asof", required=True)
     sp.add_argument("--per-years", type=int, default=5, help="lookback window for average historical PER")
+    sp.add_argument("--corp-actions", help="idxdata corp_actions.csv for split/rights adjustment")
     sp.set_defaults(fn=cmd_metrics)
 
     args = ap.parse_args(argv)

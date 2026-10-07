@@ -216,3 +216,21 @@ def test_git_sha_dirty_suffix(monkeypatch):
     assert cli._git_sha() == "abc123-dirty"
     monkeypatch.setattr(cli.subprocess, "run", lambda cmd, **k: NS(returncode=0, stdout="abc123\n" if "rev-parse" in cmd else ""))
     assert cli._git_sha() == "abc123"
+
+
+def test_metrics_corp_actions_cli(monkeypatch, tmp_path):
+    import csv
+    import json
+
+    monkeypatch.setattr("finx.cli.OUT", tmp_path / "out")
+    d = {"file": "X/a.pdf", "ticker": "X",
+         "profile": {"doc_type": "FS", "period_end": "2024-12-31", "period_months": 12,
+                     "currency": "IDR", "scale": 1},
+         "fields": {"eps_basic": {"raw": 100, "prior": None, "status": "ok"}}}
+    pred = tmp_path / "pred.jsonl"
+    pred.write_text(json.dumps(d) + "\n", encoding="utf-8")
+    ca = tmp_path / "ca.csv"
+    ca.write_text("ticker,action_type,ex_date,adj_factor,conflict\nX,SPLIT,2025-03-03,0.2,0\n", encoding="utf-8")
+    main(["metrics", "--pred", str(pred), "--asof", "2025-06-30", "--corp-actions", str(ca)])
+    rows = list(csv.DictReader((tmp_path / "out" / "metrics.csv").open(encoding="utf-8")))
+    assert rows[0]["split_factor"] == "0.2"

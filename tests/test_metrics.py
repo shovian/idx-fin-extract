@@ -3,6 +3,7 @@ import csv
 import pytest
 
 from finx.metrics import average_per, panel, quality_flags, quarter, ratios, report, ttm
+from finx.metrics import read_corp_actions, split_factor
 
 
 def doc(t, pe, months, cur="IDR", scale=1, doc_type="FS", **fields):
@@ -167,3 +168,42 @@ def test_eps_unit_divides_printed_eps():
     d["fields"]["eps_basic"]["unit"] = 1000
     best = panel([d])
     assert ttm(best, "X", "2024-12-31", "eps_basic") == (pytest.approx(0.00018), "fy")
+
+
+def test_read_corp_actions_filters(tmp_path):
+    p = tmp_path / "ca.csv"
+    p.write_text("ticker,action_type,ex_date,adj_factor,conflict\n"
+                 "X,SPLIT,2024-06-03,0.2,0\n"
+                 "X,CASH_DIVIDEND,2024-05-01,,0\n"
+                 "X,RIGHTS,2024-09-02,0.9,1\n"
+                 "Y,BONUS,2023-01-02,0.5,0\n", encoding="utf-8")
+    assert read_corp_actions(p) == {"X": [("2024-06-03", 0.2)], "Y": [("2023-01-02", 0.5)]}
+
+
+def test_split_factor_window():
+    acts = [("2024-06-03", 0.2), ("2025-02-03", 0.5)]
+    assert split_factor(acts, "2023-12-31", "2024-06-02") == 1.0
+    assert split_factor(acts, "2023-12-31", "2024-06-03") == pytest.approx(0.2)
+    assert split_factor(acts, "2023-12-31", "2025-03-01") == pytest.approx(0.1)
+    assert split_factor(acts, "2024-12-31", "2025-03-01") == pytest.approx(0.5)  # report after first split
+    assert split_factor(None, "2023-12-31", "2025-03-01") == 1.0
+
+
+def test_average_per_adjusts_old_eps_after_split():
+    best = panel([doc("X", "2023-12-31", 12, eps_basic=(100, None))])
+    # 1:5 split ex 2024-01-11: closes drop 1000 -> 200; PER must stay 10 on both sides
+    prices = _daily("2024-01-01", 10, 1000.0) + _daily("2024-01-11", 20, 200.0)
+    mean, n = average_per(best, "X", prices, [], "2024-02-29", actions=[("2024-01-11", 0.2)])
+    assert n == 30 and mean == pytest.approx(10.0)
+    mean0, _ = average_per(best, "X", prices, [], "2024-02-29")
+    assert mean0 == pytest.approx((10 * 10 + 20 * 2) / 30)  # unadjusted: wrong PER 2 after split
+
+
+def test_ratios_apply_factor_to_per_share_values():
+    d = doc("X", "2023-12-31", 12, equity_parent=(1000, None), net_income_parent=(100, None),
+            eps_basic=(100, None))
+    best = panel([d])
+    r = ratios(best, "X", "2023-12-31", price=200.0, usd_idr=None, avg_per=10.0, factor=0.2)
+    assert r["eps_ttm"] == 100 and r["split_factor"] == 0.2
+    assert r["per"] == pytest.approx(10.0)          # 200 / (100 x 0.2)
+    assert r["fair_value"] == pytest.approx(200.0)  # 100 x 0.2 x 10
