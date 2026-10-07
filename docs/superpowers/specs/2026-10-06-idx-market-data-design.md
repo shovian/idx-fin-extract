@@ -1,6 +1,6 @@
 # IDX Market Data (`idxdata`) — Design Spec
 
-Tanggal: 2026-10-06 · Status: DRAFT (menunggu review pengguna) · Riset: lampiran R1–R3 (§9)
+Tanggal: 2026-10-06 · Revisi 2026-10-07 · Status: DISETUJUI & DIIMPLEMENTASIKAN (repo shovian/idx-data) · Riset: lampiran R1–R3 (§9)
 
 ## 1. Tujuan & cakupan
 
@@ -18,10 +18,12 @@ Di luar cakupan: data real-time/intraday, order book, eksekusi transaksi, redist
 
 - **C1. Pemisahan dari `finx`.** `idxdata` hidup di repo sendiri (`~/Documents/idx-data`, `github.com/shovian/idx-data`). `src/finx/` tetap tanpa akses jaringan; `finx` hanya membaca CSV keluaran `idxdata`. Tidak ada import silang.
 - **C2. Tidak ada akses otomatis ke idx.co.id.** Terverifikasi: semua GET ke idx.co.id (halaman, `/primary/*` JSON, `robots.txt`, StaticData PDF) → HTTP 403 Cloudflare challenge (R1–R3). Syarat Penggunaan IDX dilaporkan melarang crawling/scraping dan mewajibkan izin tertulis untuk penggunaan komersial (R2 §4, belum dibaca langsung — lihat D1). Konsekuensi: **tidak memakai Playwright/curl_cffi untuk menembus Cloudflare.** Data dari idx.co.id masuk lewat **unduhan manual** pengguna ke folder `inbox/`.
+
+  **Revisi 2026-10-07 (keputusan tim bisnis):** C2 diabaikan untuk penggunaan operasional. Data idx.co.id boleh diambil lewat browser di PC pengguna (bukan server), dengan jeda antar-permintaan, tanpa mengakali Cloudflare, dan dengan izin pengguna setiap kali. Kode idxdata sendiri tetap tidak mengambil dari idx.co.id; file masuk lewat inbox/.
 - **C3. Sumber otomatis hanya yang dapat diakses HTTP biasa tanpa mengakali proteksi:** Yahoo Finance chart API (harga, kurs), `web.ksei.co.id` (arsip & jadwal), vendor ber-API-key (opsional, D2).
 - **C4. Keluaran idempoten & dapat diaudit.** Setiap baris membawa `source` dan `fetched_at`; file mentah disimpan di `raw/<source>/<yyyy-mm-dd>/` dan tidak diubah; parse ulang dari `raw/` harus menghasilkan CSV identik.
 - **C5. Nilai salah lebih buruk daripada kosong** (sama dengan `finx`). Parser yang ragu → baris dilewati + dicatat di `logs/rejects.csv`.
-- **C6. Dependensi:** stdlib + `openpyxl` (XLSX) + `pymupdf` (PDF KSEI, Tahap 3). Tanpa `pandas`, tanpa browser.
+- **C6. Dependensi:** stdlib + `openpyxl` (XLSX) + `pdfplumber` (PDF KSEI & IDX; MIT, dipilih karena pymupdf tidak tersedia di lingkungan build). Tanpa `pandas`, tanpa browser.
 
 ## 3. Arsitektur
 
@@ -48,6 +50,7 @@ Semua modul mengikuti pipa yang sama: `fetch (atau baca inbox) → raw/ → pars
 
 **Keluaran** (format sudah dipakai `finx.metrics.read_prices/read_fx`):
 - `data/prices.csv`: `date,ticker,close,adj_close,volume,source,fetched_at` — `finx` membaca `date,ticker,close`. `close` = harga penutupan **tidak disesuaikan** (konsisten dengan EPS historis yang dicetak; penyesuaian split dilakukan di Tahap 3).
+- Terverifikasi: close Yahoo sudah disesuaikan split; idxdata mengembalikannya ke harga transaksi (close × faktor split sesudah tanggal itu) dan menyimpan nilai Yahoo di close_split_adj.
 - `data/usd_idr.csv`: `date,usd_idr,source,fetched_at`.
 - `raw/yahoo/...json` (termasuk `events.splits`, dipakai Tahap 3 sebagai sumber split sekunder).
 
@@ -74,13 +77,13 @@ Batas data kepemilikan: akun kustodian/nominee (bank kustodian, omnibus) menyemb
 
 ### 5.2 `idxdata.ownership` (inti Tahap 2, tanpa biaya)
 
-- **Masukan:** XLSX "Pemegang Saham di atas 1% (KSEI) [Semua Emiten Saham]" yang diunduh manual pengguna dari idx.co.id (Berita › Pengumuman) ke `inbox/holders/`. Kolom yang dilaporkan (R2, belum terverifikasi dari file asli — verifikasi di langkah pertama plan): `date, share_code, issuer_name, investor_name, investor_type (CP/ID/IB/MF/SC/IS/PF/FD/OT), local_foreign, nationality, domicile, holdings_scripless, holdings_scrip, total_holding_shares, percentage`.
+- **Masukan:** PDF lampiran "Pemegang Saham di atas 1% (KSEI)" (Mar–Jun 2026 berbentuk PDF; XLSX tetap didukung). Klasifikasi investor berupa teks (35 label pada Mei 2026); teks asli di investor_type, kode di investor_type_code bila padanannya jelas.
 - **Parser:** cari baris header berdasarkan nama kolom (bukan posisi); normalisasi nama investor (upper, spasi tunggal, buang tanda baca akhir) hanya untuk kunci join — nama asli tetap disimpan.
 - **Keluaran:**
   - `data/holders.csv`: satu baris per `(snapshot_date, ticker, investor_name)`.
   - `data/holder_changes.csv`: untuk setiap pasangan snapshot berurutan: `ticker, investor_name, investor_type, local_foreign, shares_prev, shares_cur, delta_shares, pct_prev, pct_cur, change_type ∈ {NEW, EXIT, UP, DOWN, SAME}`. `EXIT` = turun di bawah 1% **atau** keluar sepenuhnya (tidak dapat dibedakan — dicatat di kolom `note`).
-  - `data/composition.csv` (dari zip KSEI, otomatis): `month, security_type, investor_type, local_foreign, value/units`.
-- **Validasi:** jumlah `percentage` per ticker ≤ 100,5; `total_holding_shares` = scripless + scrip; ticker 4 huruf; duplikat kunci → reject.
+  - `data/composition.csv` (dari zip KSEI, otomatis): `month, security_type, investor_type, local_foreign, value/units`. BalanceposEfek per kode efek; total lokal+asing ≠ saham tercatat (mis. BBCA 42,6% per 30-9-2026) → kolom foreign_pct, foreign_pct_listed, coverage_pct; keluaran tambahan data/foreign_ownership.csv.
+- **Validasi:** jumlah `percentage` per ticker ≤ 100,5; `total_holding_shares` = scripless + scrip; ticker 4 huruf; investor yang sama dengan dua rekening pada satu saham dijumlahkan (kolom accounts), bukan ditolak.
 - **Penyesuaian aksi korporasi:** `delta_shares` antar bulan dikoreksi faktor split dari Tahap 3 bila ada split di antara dua snapshot; tanpa data Tahap 3, baris diberi `split_unchecked=1`.
 
 ### 5.3 `idxdata.brokers` (opsional, menunggu D2)
@@ -97,7 +100,7 @@ Antarmuka adapter tunggal: `fetch_broker_flow(ticker, date) -> list[BrokerFlow(b
 3. **Inbox manual** `inbox/corpactions/*.csv` dengan skema keluaran yang sama, untuk koreksi atau data dari pengumuman idx.co.id yang diunduh manual.
 4. **Turunan dari `finx`:** lompatan `shares_issued` antar laporan dengan rasio mendekati bilangan bulat (2, 5, 10, 1/2, …) → kandidat split (`source=derived`, tidak pernah menimpa sumber 1–3).
 
-**Keluaran:** `data/corp_actions.csv`: `ticker, action_type ∈ {SPLIT, REVERSE_SPLIT, BONUS, STOCK_DIVIDEND, RIGHTS, CASH_DIVIDEND, BUYBACK, TENDER_OFFER, RUPS}, ex_date, cum_date, recording_date, pay_date, ratio_old, ratio_new, amount_per_share, currency, exercise_price, source, source_ref, fetched_at`. Kolom `adj_factor` dihitung untuk SPLIT/REVERSE_SPLIT/BONUS/STOCK_DIVIDEND (= ratio_old/ratio_new) dan RIGHTS (rumus TERP).
+**Keluaran:** `data/corp_actions.csv`: `ticker, action_type ∈ {SPLIT, REVERSE_SPLIT, BONUS, STOCK_DIVIDEND, RIGHTS, CASH_DIVIDEND, BUYBACK, TENDER_OFFER, RUPS}, ex_date, cum_date, recording_date, pay_date, ratio_old, ratio_new, amount_per_share, currency, exercise_price, source, source_ref, fetched_at`. Kolom `adj_factor` dihitung untuk SPLIT/REVERSE_SPLIT/BONUS/STOCK_DIVIDEND (= ratio_old/ratio_new) dan RIGHTS (rumus TERP). Surat "Revisi Rasio Dividen" KSEI dipakai mengoreksi nominal (data/ksei_amendments.csv). Daftar surat di data/ksei_letters.csv.
 
 **Rekonsiliasi:** bila sumber 1 dan 2 berbeda ratio atau ex_date > 3 hari bursa → baris `conflict=1`, tidak dipakai untuk penyesuaian sampai dikoreksi lewat inbox.
 
@@ -121,11 +124,11 @@ Antarmuka adapter tunggal: `fetch_broker_flow(ticker, date) -> list[BrokerFlow(b
 
 ## 9. Keputusan terbuka
 
-- **D1. Ketentuan penggunaan.** Pengguna membaca langsung Syarat Penggunaan idx.co.id dan ketentuan KSEI di browser. Default: C2 tetap berlaku (tanpa otomasi idx.co.id).
-- **D2. Data harian broker × saham & net asing per saham.** Pilihan: (a) tidak dipakai (default sementara); (b) vendor ber-API-key (Invezgo tier gratis/berbayar — harga & ketentuan perlu dicek); (c) lisensi IDX Data Services.
-- **D3. Tujuan utama smart money.** (A) sinyal harian broker, (B) backtest historis, (C) pemantauan kepemilikan bulanan, (D) kombinasi. Default spec ini: **C** (satu-satunya yang dapat dipenuhi data gratis & patuh ketentuan); A/B membutuhkan D2(b/c).
-- **D4. Daftar ticker.** Default: 23 ticker folder dataset `finx` (`~/Downloads/financial report`).
-- **D5. Urutan implementasi.** Default: Tahap 1 → Tahap 3 (karena memperbaiki PER/FVP `finx`) → Tahap 2.
+- **D1. Ketentuan penggunaan.** Pengguna membaca langsung Syarat Penggunaan idx.co.id dan ketentuan KSEI di browser. Default: C2 tetap berlaku (tanpa otomasi idx.co.id). **Keputusan:** Diputuskan tim bisnis (lihat C2)
+- **D2. Data harian broker × saham & net asing per saham.** Pilihan: (a) tidak dipakai (default sementara); (b) vendor ber-API-key (Invezgo tier gratis/berbayar — harga & ketentuan perlu dicek); (c) lisensi IDX Data Services. **Keputusan:** (a) tidak dipakai — brokers.py hanya antarmuka
+- **D3. Tujuan utama smart money.** (A) sinyal harian broker, (B) backtest historis, (C) pemantauan kepemilikan bulanan, (D) kombinasi. Default spec ini: **C** (satu-satunya yang dapat dipenuhi data gratis & patuh ketentuan); A/B membutuhkan D2(b/c). **Keputusan:** C (pemantauan kepemilikan bulanan)
+- **D4. Daftar ticker.** Default: 23 ticker folder dataset `finx` (`~/Downloads/financial report`). **Keputusan:** 25 emiten Warren Buffet Project (config/tickers.txt)
+- **D5. Urutan implementasi.** Default: Tahap 1 → Tahap 3 (karena memperbaiki PER/FVP `finx`) → Tahap 2. **Keputusan:** 1 → 3 → 2, selesai 2026-10-06
 
 ## 10. Lampiran riset
 
@@ -134,3 +137,7 @@ Antarmuka adapter tunggal: `fetch_broker_flow(ticker, date) -> list[BrokerFlow(b
 - R3 Aksi korporasi: `research-corp-actions.md`
 
 (Disalin ke `docs/superpowers/specs/research/` bersama spec ini.) Setiap klaim di riset bertanda VERIFIED (diakses langsung, 2026-10-06) atau REPORTED (sumber sekunder).
+
+## 11. Status implementasi
+
+Repo shovian/idx-data. Selisih terhadap spec yang masih terbuka: (1) C4 parse ulang dari raw/ untuk harga & komposisi — plan 2026-10-07 Task 3; (2) integrasi finx --corp-actions & EPS per 1.000 saham — plan 2026-10-07 Task 4–5.
