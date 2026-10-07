@@ -54,6 +54,8 @@ def ttm(best, ticker, period_end, field, actions=None):
     fy_prev = full(fy_doc, field)
     prev_same = prior_full(d, field)  # interim comparative column = same YTD period last year
     if fy_prev is not None and prev_same is not None:
+        if field == "eps_basic" and ambiguous(actions, f"{int(period_end[:4]) - 1}-12-31", period_end):
+            return None, "ambiguous"  # the FY report itself may already be restated
         if field == "eps_basic":  # FY comes from the pre-split report; YTD columns are on the interim's basis
             fy_prev *= split_factor(actions, f"{int(period_end[:4]) - 1}-12-31", period_end)
         return fy_prev - prev_same + cur, "ttm"
@@ -94,7 +96,7 @@ ADJ_TYPES = {"SPLIT", "REVERSE_SPLIT", "BONUS", "STOCK_DIVIDEND", "RIGHTS"}
 
 
 def read_corp_actions(path: Path) -> dict[str, list[tuple[str, float]]]:
-    seen: set[tuple[str, str, str]] = set()
+    seen: dict[tuple[str, str, str], float] = {}
     out: dict[str, list[tuple[str, float]]] = defaultdict(list)
     with Path(path).open(newline="", encoding="utf-8") as fh:
         for r in csv.DictReader(fh):
@@ -108,9 +110,13 @@ def read_corp_actions(path: Path) -> dict[str, list[tuple[str, float]]]:
                 a = float((r.get("adj_factor") or "").strip())
             except ValueError:
                 continue
-            if not (math.isfinite(a) and a > 0) or (t, ex, typ) in seen:
+            if not (math.isfinite(a) and a > 0):
                 continue
-            seen.add((t, ex, typ))
+            seen.setdefault((t, ex, typ), a)
+            if seen[(t, ex, typ)] != a:
+                seen[(t, ex, typ)] = math.nan  # same action, different factors: treat as conflict
+    for (t, ex, typ), a in seen.items():
+        if not math.isnan(a):
             out[t].append((ex, a))
     for v in out.values():
         v.sort()
@@ -129,12 +135,12 @@ def split_factor(actions, period_end: str, day: str) -> float:
 FILING_LAG_DAYS = 120
 
 
-def ambiguous(actions, period_end: str) -> bool:
+def ambiguous(actions, period_end: str, on: str | None = None) -> bool:
     """True when an action's ex_date falls inside the assumed filing window, so the report's EPS may or may
     not already be restated (PSAK 56) and no multiplier can be trusted."""
     # ponytail: fixed 120-day filing lag; use real filing dates if they become available
     end = (datetime.date.fromisoformat(period_end) + datetime.timedelta(days=FILING_LAG_DAYS)).isoformat()
-    return any(period_end < ex <= end for ex, _ in actions or ())
+    return any(period_end < ex <= end and (on is None or ex <= on) for ex, _ in actions or ())
 
 
 def average_per(best, ticker, prices, fx, asof: str, years: int = 5, min_points: int = 20, actions=None):
@@ -150,7 +156,7 @@ def average_per(best, ticker, prices, fx, asof: str, years: int = 5, min_points:
     for t, pe in sorted(best):
         if t == ticker:
             e, basis = ttm(best, t, pe, "eps_basic", actions)
-            periods.append((pe, best[(t, pe)]["profile"]["currency"], None if basis == "annualized" or ambiguous(actions, pe) else e))
+            periods.append((pe, best[(t, pe)]["profile"]["currency"], None if basis in ("annualized", "ambiguous") else e))
     start = f"{int(asof[:4]) - years}{asof[4:]}"
     pers = []
     for day, close in prices:
@@ -160,6 +166,8 @@ def average_per(best, ticker, prices, fx, asof: str, years: int = 5, min_points:
         if not known:
             continue
         pe, cur, eps = known[-1]
+        if ambiguous(actions, pe, day):
+            continue
         rate = _rate(cur, last_on_or_before(fx, day))
         if eps and eps > 0 and rate:
             pers.append(close / (eps * split_factor(actions, pe, day) * rate))
@@ -168,7 +176,7 @@ def average_per(best, ticker, prices, fx, asof: str, years: int = 5, min_points:
     return sum(pers) / len(pers), len(pers)
 
 
-def ratios(best, ticker, period_end, price=None, usd_idr=None, avg_per=None, factor: float = 1.0, actions=None) -> dict:
+def ratios(best, ticker, period_end, price=None, usd_idr=None, avg_per=None, factor: float = 1.0, actions=None, asof=None) -> dict:
     d = best[(ticker, period_end)]
     tl, te = full(d, "total_liabilities"), full(d, "total_equity")
     ca, cl = full(d, "current_assets"), full(d, "current_liabilities")
@@ -181,7 +189,7 @@ def ratios(best, ticker, period_end, price=None, usd_idr=None, avg_per=None, fac
            "current_ratio": ca / cl if ca is not None and cl else None,
            "eps_ttm": eps_ttm, "eps_basis": basis, "bvps": bvps, "bvps_basis": n_basis if bvps is not None else None,
            "split_factor": factor, "per": None, "pbv": None, "fair_value": None}
-    if ambiguous(actions, period_end):
+    if ambiguous(actions, period_end, asof):
         out["split_factor"] = None
     elif rate:
         if price and eps_ttm and eps_ttm > 0:
@@ -271,7 +279,7 @@ def report(docs, prices, fx, asof: str, out_dir: Path, per_years: int = 5, actio
         acts = (actions or {}).get(t)
         row["avg_per"], row["avg_per_days"] = average_per(best, t, prices.get(t, []), fx, asof, per_years, actions=acts)
         row.update(ratios(best, t, pe, price, usd_idr, row["avg_per"], factor=split_factor(acts, pe, asof),
-                          actions=acts))
+                          actions=acts, asof=asof))
         mrows.append(row)
     _write(out_dir / "metrics.csv", mrows)
     _write(out_dir / "quality_flags.csv", quality_flags(best))

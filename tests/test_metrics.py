@@ -219,7 +219,7 @@ def test_average_per_reverse_split_continuous():
 def test_ttm_eps_across_split_uses_adjusted_fy():
     best = panel([doc("X", "2023-12-31", 12, eps_basic=(100, None)),
                   doc("X", "2024-06-30", 6, eps_basic=(12, 10))])
-    acts = [("2024-04-01", 0.2)]
+    acts = [("2024-05-15", 0.2)]
     assert ttm(best, "X", "2024-06-30", "eps_basic", actions=acts) == (pytest.approx(22), "ttm")
     assert ttm(best, "X", "2024-06-30", "eps_basic") == (pytest.approx(102), "ttm")
 
@@ -232,7 +232,8 @@ def test_ambiguous_report_is_skipped():
     assert r["per"] is None and r["pbv"] is None and r["fair_value"] is None and r["split_factor"] is None
     assert r["eps_ttm"] == 100
     prices = _daily("2024-01-01", 60, 200.0)
-    assert average_per(best, "X", prices, [], "2024-03-01", actions=acts) == (None, 0)
+    mean, n = average_per(best, "X", prices, [], "2024-03-01", actions=acts)
+    assert n == 29 and mean == pytest.approx(2.0)  # only days before ex_date count; later days skipped
 
 
 def test_read_corp_actions_robust(tmp_path):
@@ -257,3 +258,34 @@ def test_report_per_changes_with_actions(tmp_path):
     b = list(csv.DictReader((tmp_path / "b" / "metrics.csv").open()))[0]
     assert float(a["per"]) == pytest.approx(2.0) and float(b["per"]) == pytest.approx(10.0)
     assert b["split_factor"] == "0.2"
+
+
+def test_ttm_ambiguous_prior_fy_restated():
+    best = panel([doc("X", "2023-12-31", 12, eps_basic=(100, None), equity_parent=(1000, None)),
+                  doc("X", "2024-06-30", 6, eps_basic=(12, 10), equity_parent=(1000, None))])
+    acts = [("2024-02-15", 0.2)]
+    assert ttm(best, "X", "2024-06-30", "eps_basic", actions=acts) == (None, "ambiguous")
+    r = ratios(best, "X", "2024-06-30", price=200.0, usd_idr=None, avg_per=10.0, factor=0.2, actions=acts,
+               asof="2024-07-31")
+    assert r["per"] is None and r["fair_value"] is None
+    prices = _daily("2024-07-01", 40, 200.0)
+    assert average_per(best, "X", prices, [], "2024-08-31", actions=acts) == (None, 0)
+
+
+def test_ambiguity_ignores_actions_after_evaluation_date():
+    d = doc("X", "2023-12-31", 12, eps_basic=(100, None))
+    best = panel([d])
+    acts = [("2024-01-30", 0.2)]
+    r = ratios(best, "X", "2023-12-31", price=200.0, usd_idr=None, factor=1.0, actions=acts, asof="2024-01-15")
+    assert r["per"] == pytest.approx(2.0) and r["split_factor"] == 1.0
+    prices = _daily("2024-01-01", 20, 200.0)  # all days before ex_date
+    mean, n = average_per(best, "X", prices, [], "2024-01-31", actions=acts, min_points=1)
+    assert n == 20
+
+
+def test_read_corp_actions_conflicting_duplicate_dropped(tmp_path):
+    p = tmp_path / "ca.csv"
+    p.write_text("ticker,action_type,ex_date,adj_factor,conflict\n"
+                 "X,SPLIT,2024-06-03,0.2,0\nX,SPLIT,2024-06-03,0.25,0\nX,SPLIT,2024-06-03,0.2,0\n"
+                 "X,BONUS,2024-07-01,0.5,0\n", encoding="utf-8")
+    assert read_corp_actions(p) == {"X": [("2024-07-01", 0.5)]}
