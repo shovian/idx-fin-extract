@@ -35,7 +35,7 @@ def validate(fields: dict[str, FieldResult], profile: Profile) -> None:
     if ni != 0 and (ni > 0) != (eps > 0):
         flag(["net_income_parent", "eps_basic"], "sign of net income and EPS differ")
         return
-    implied = ni * profile.scale / eps
+    implied = ni * profile.scale / (eps / fields["eps_basic"].unit)
     if not SHARES_MIN <= implied <= SHARES_MAX:
         flag(["net_income_parent", "eps_basic"], f"implied share count {implied:.3g} implausible (scale?)")
         return

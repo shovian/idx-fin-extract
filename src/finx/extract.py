@@ -5,6 +5,7 @@ from finx.layout import Row, build_rows
 from finx.models import FieldResult, Page, Profile
 
 _SHARES = re.compile(r"(\d{1,3}(?:[.,]\d{3}){2,})\s*(?:lembar\s+)?(?:saham|shares)", re.I)
+PER_1000 = re.compile(r"per\s+1[.,]000\s+(?:lembar\s+)?(?:saham|shares)", re.I)
 _ISSUED = re.compile(r"ditempatkan dan disetor penuh|issued and fully paid", re.I)
 
 
@@ -25,6 +26,11 @@ def extract_fields(pages_by_no: dict[int, Page], blocks: dict[str, list[int]],
             out[rule.name] = _find(rule, blocks.get(rule.stmt, []), rows_of, profile.is_bank)
     if profile.is_bank:
         out["revenue"] = _bank_revenue(out["revenue"], _find(BANK_OTHER_INCOME, blocks.get("IS", []), rows_of, True))
+    eps = out.get("eps_basic")
+    if eps and eps.status == "ok" and eps.page in pages_by_no:
+        # ponytail: page-level match; a page mentioning "per 1.000 saham" elsewhere would misfire
+        if PER_1000.search(" ".join(w.text for w in pages_by_no[eps.page].words)):
+            eps.unit = 1000
     return out
 
 

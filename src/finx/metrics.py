@@ -14,7 +14,7 @@ def _val(doc: dict | None, field: str, key: str):
     if not f or f.get("status") != "ok" or f.get(key) is None:
         return None
     if field == "eps_basic":
-        return f[key]  # EPS is printed in full units
+        return f[key] / f.get("unit", 1)  # EPS is printed in full units, possibly per 1,000 shares
     scale = doc["profile"]["scale"]
     return None if scale is None else f[key] * scale
 

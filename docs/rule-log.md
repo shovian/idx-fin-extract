@@ -13,3 +13,4 @@ Page fields (bs/is/cf_page): correct = gold page contained in predicted block (c
 Stop target reached after iteration 2 (strict P 0.989 ≥ 0.98, R 0.869 ≥ 0.85). Lenient after iteration 2: P 0.989 (Wilson95 0.969-0.996), R 0.869 (0.828-0.902).
 
 Task 13 dilewati: akurasi halaman BS/IS/CF = precision 1.000/1.000/1.000, recall 0.969/0.969/0.969 (build, strict; 31/32 docs with statements; the one miss is MDKA AR whose statement pages yield only blank glyphs (private font), expected missed).
+| 3 | 2026-10-07 | BRMS/BUMI build (IS page) | EPS dicetak "per 1.000 saham" → cek saham & PER salah 1000× | FieldResult.unit=1000 bila halaman EPS memuat "per 1.000 saham/shares"; raw tidak berubah | extract, validate, metrics | 0.989 → 0.989 | 0.869 → 0.869 |

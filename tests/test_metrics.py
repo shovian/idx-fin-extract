@@ -160,3 +160,10 @@ def test_bvps_basis():
     assert r["bvps_basis"] == "ni_eps" and r["bvps"] == 100
     d = doc("B", "2024-12-31", 12, net_income_parent=(100, None))
     assert ratios(panel([d]), "B", "2024-12-31")["bvps_basis"] is None
+
+
+def test_eps_unit_divides_printed_eps():
+    d = doc("X", "2024-12-31", 12, eps_basic=(0.18, None))
+    d["fields"]["eps_basic"]["unit"] = 1000
+    best = panel([d])
+    assert ttm(best, "X", "2024-12-31", "eps_basic") == (pytest.approx(0.00018), "fy")

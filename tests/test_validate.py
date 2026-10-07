@@ -53,3 +53,12 @@ def test_issued_shares_cross_check():
     validate(f, Profile(scale=1_000_000))
     assert f["shares_issued"].status == "suspect"
     assert f["eps_basic"].status == "ok"
+
+
+def test_eps_per_thousand_shares_used_in_share_checks():
+    # NI 66,800 thousand USD, EPS 0.18 per 1,000 shares -> 3.71e11 shares (BUMI-like)
+    f = _f(net_income_parent=66800.0, eps_basic=0.18, shares_issued=371_335_392_068.0)
+    f["eps_basic"].unit = 1000
+    validate(f, Profile(scale=1000))
+    assert f["shares_issued"].status == "ok"
+    assert f["eps_basic"].status == "ok"

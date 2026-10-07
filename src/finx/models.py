@@ -49,6 +49,7 @@ class FieldResult:
     label: str = ""
     status: str = "missing"  # "ok" | "suspect" | "missing" | "na"
     reason: str = ""
+    unit: int = 1  # shares per printed EPS value: 1000 when the statement prints EPS "per 1.000 saham"
 
 
 @dataclass

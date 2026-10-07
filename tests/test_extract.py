@@ -86,3 +86,20 @@ def test_bank_revenue_missing_when_other_income_absent():
                      (124, "Laba sebelum pajak", "50.000", "40.000")])
     f = extract_fields({9: page}, {"BS": [], "IS": [9], "CF": []}, Profile(locale="id", is_bank=True, doc_type="FS"))
     assert f["revenue"].raw is None and "other operating income" in f["revenue"].reason
+
+
+def test_eps_printed_per_thousand_shares_sets_unit():
+    is_page = _page(5, [(100, "PENDAPATAN", "801.723", "97.943"),
+                        (136, "Pemilik entitas induk", "160.785", "15.621"),
+                        (148, "LABA PER 1.000 SAHAM DASAR", "", ""),
+                        (160, "Laba per saham", "0,18", "0,10")])
+    prof = Profile(locale="id", scale=1000, currency="USD", doc_type="FS")
+    f = extract_fields({4: BS, 5: is_page}, {"BS": [4], "IS": [5], "CF": []}, prof)
+    assert f["eps_basic"].raw == 0.18  # printed value unchanged (gold compares raw)
+    assert f["eps_basic"].unit == 1000
+
+
+def test_eps_per_share_keeps_unit_one():
+    prof = Profile(locale="id", scale=1000, currency="USD", doc_type="FS")
+    f = extract_fields({4: BS, 5: IS}, {"BS": [4], "IS": [5], "CF": []}, prof)
+    assert f["eps_basic"].unit == 1
