@@ -230,7 +230,7 @@ def test_metrics_corp_actions_cli(monkeypatch, tmp_path):
     pred = tmp_path / "pred.jsonl"
     pred.write_text(json.dumps(d) + "\n", encoding="utf-8")
     ca = tmp_path / "ca.csv"
-    ca.write_text("ticker,action_type,ex_date,adj_factor,conflict\nX,SPLIT,2025-03-03,0.2,0\n", encoding="utf-8")
+    ca.write_text("ticker,action_type,ex_date,adj_factor,conflict\nX,SPLIT,2025-06-03,0.2,0\n", encoding="utf-8")
     main(["metrics", "--pred", str(pred), "--asof", "2025-06-30", "--corp-actions", str(ca)])
     rows = list(csv.DictReader((tmp_path / "out" / "metrics.csv").open(encoding="utf-8")))
     assert rows[0]["split_factor"] == "0.2"

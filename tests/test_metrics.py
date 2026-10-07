@@ -2,8 +2,8 @@ import csv
 
 import pytest
 
-from finx.metrics import average_per, panel, quality_flags, quarter, ratios, report, ttm
-from finx.metrics import read_corp_actions, split_factor
+from finx.metrics import (average_per, panel, quality_flags, quarter, ratios, read_corp_actions, report,
+                          split_factor, ttm)
 
 
 def doc(t, pe, months, cur="IDR", scale=1, doc_type="FS", **fields):
@@ -190,7 +190,7 @@ def test_split_factor_window():
 
 
 def test_average_per_adjusts_old_eps_after_split():
-    best = panel([doc("X", "2023-12-31", 12, eps_basic=(100, None))])
+    best = panel([doc("X", "2023-06-30", 12, eps_basic=(100, None))])
     # 1:5 split ex 2024-01-11: closes drop 1000 -> 200; PER must stay 10 on both sides
     prices = _daily("2024-01-01", 10, 1000.0) + _daily("2024-01-11", 20, 200.0)
     mean, n = average_per(best, "X", prices, [], "2024-02-29", actions=[("2024-01-11", 0.2)])
@@ -207,3 +207,53 @@ def test_ratios_apply_factor_to_per_share_values():
     assert r["eps_ttm"] == 100 and r["split_factor"] == 0.2
     assert r["per"] == pytest.approx(10.0)          # 200 / (100 x 0.2)
     assert r["fair_value"] == pytest.approx(200.0)  # 100 x 0.2 x 10
+
+
+def test_average_per_reverse_split_continuous():
+    best = panel([doc("X", "2023-06-30", 12, eps_basic=(100, None))])
+    prices = _daily("2024-01-01", 10, 1000.0) + _daily("2024-01-11", 20, 2000.0)
+    mean, n = average_per(best, "X", prices, [], "2024-02-29", actions=[("2024-01-11", 2.0)])
+    assert n == 30 and mean == pytest.approx(10.0)
+
+
+def test_ttm_eps_across_split_uses_adjusted_fy():
+    best = panel([doc("X", "2023-12-31", 12, eps_basic=(100, None)),
+                  doc("X", "2024-06-30", 6, eps_basic=(12, 10))])
+    acts = [("2024-04-01", 0.2)]
+    assert ttm(best, "X", "2024-06-30", "eps_basic", actions=acts) == (pytest.approx(22), "ttm")
+    assert ttm(best, "X", "2024-06-30", "eps_basic") == (pytest.approx(102), "ttm")
+
+
+def test_ambiguous_report_is_skipped():
+    d = doc("X", "2023-12-31", 12, equity_parent=(1000, None), eps_basic=(100, None), shares_issued=(1, None))
+    best = panel([d])
+    acts = [("2024-01-30", 0.2)]  # 30 days after period end: report may or may not be restated
+    r = ratios(best, "X", "2023-12-31", price=200.0, usd_idr=None, avg_per=10.0, factor=0.2, actions=acts)
+    assert r["per"] is None and r["pbv"] is None and r["fair_value"] is None and r["split_factor"] is None
+    assert r["eps_ttm"] == 100
+    prices = _daily("2024-01-01", 60, 200.0)
+    assert average_per(best, "X", prices, [], "2024-03-01", actions=acts) == (None, 0)
+
+
+def test_read_corp_actions_robust(tmp_path):
+    p = tmp_path / "ca.csv"
+    p.write_text("ticker,action_type,ex_date,adj_factor,conflict\n"
+                 "X,split,2024-06-03,0.2,\n"
+                 "X,SPLIT,2024-06-03,0.2,0\n"
+                 "X,SPLIT,2024-07-01,0,0\n"
+                 "X,SPLIT,2024-08-01,nan,0\n"
+                 "X,SPLIT,2024-09-01,abc,0\n"
+                 "X,BONUS,2024-10-01,0.5,true\n"
+                 ",BONUS,2024-10-01,0.5,0\n", encoding="utf-8")
+    assert read_corp_actions(p) == {"X": [("2024-06-03", 0.2)]}
+
+
+def test_report_per_changes_with_actions(tmp_path):
+    docs = [doc("X", "2023-06-30", 12, net_income_parent=(100, None), eps_basic=(100, None))]
+    prices = {"X": _daily("2024-01-01", 60, 200.0)}
+    report(docs, prices, [], "2024-02-29", tmp_path / "a", per_years=5)
+    report(docs, prices, [], "2024-02-29", tmp_path / "b", per_years=5, actions={"X": [("2024-01-11", 0.2)]})
+    a = list(csv.DictReader((tmp_path / "a" / "metrics.csv").open()))[0]
+    b = list(csv.DictReader((tmp_path / "b" / "metrics.csv").open()))[0]
+    assert float(a["per"]) == pytest.approx(2.0) and float(b["per"]) == pytest.approx(10.0)
+    assert b["split_factor"] == "0.2"
