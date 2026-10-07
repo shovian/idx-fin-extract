@@ -104,7 +104,7 @@ Antarmuka adapter tunggal: `fetch_broker_flow(ticker, date) -> list[BrokerFlow(b
 
 **Rekonsiliasi:** bila sumber 1 dan 2 berbeda ratio atau ex_date > 3 hari bursa → baris `conflict=1`, tidak dipakai untuk penyesuaian sampai dikoreksi lewat inbox.
 
-**Integrasi `finx` (perubahan kecil di repo `finx`, plan terpisah):** `finx metrics --corp-actions data/corp_actions.csv` → EPS historis dikalikan kumulatif `adj_factor` untuk tanggal sebelum `ex_date` saat menghitung PER harian. Juga menangani kasus "EPS dicetak per 1.000 saham" lewat cek silang EPS ≈ NI / saham (temuan Task 12 `finx`).
+**Integrasi `finx` (perubahan kecil di repo `finx`, plan terpisah):** `finx metrics --corp-actions data/corp_actions.csv` → EPS historis dikalikan kumulatif `adj_factor` untuk tanggal sebelum `ex_date` saat menghitung PER harian. Juga menangani kasus "EPS dicetak per 1.000 saham" dideteksi dari teks halaman EPS ('per 1.000 saham'/'per 1000 shares') → FieldResult.unit=1000; nilai tercetak tidak diubah. TTM interim menyesuaikan EPS FY(t−1) dengan faktor aksi; laporan yang mungkin sudah menyajikan ulang EPS (aksi dalam 120 hari setelah period_end, termasuk FY(t−1) dalam TTM) → PER/FVP kosong. Baris corp_actions dengan conflict=1 atau source=derived tidak dipakai.
 
 ## 7. Penanganan error
 

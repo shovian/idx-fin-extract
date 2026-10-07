@@ -5,7 +5,7 @@ from finx.layout import Row, build_rows
 from finx.models import FieldResult, Page, Profile
 
 _SHARES = re.compile(r"(\d{1,3}(?:[.,]\d{3}){2,})\s*(?:lembar\s+)?(?:saham|shares)", re.I)
-PER_1000 = re.compile(r"per\s+1[.,]000\s+(?:lembar\s+)?(?:saham|shares)", re.I)
+PER_1000 = re.compile(r"per\s+1[.,]?000\s+(?:lembar\s+)?(?:saham|shares)", re.I)
 _ISSUED = re.compile(r"ditempatkan dan disetor penuh|issued and fully paid", re.I)
 
 

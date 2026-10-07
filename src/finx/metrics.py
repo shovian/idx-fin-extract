@@ -106,6 +106,9 @@ def read_corp_actions(path: Path) -> dict[str, list[tuple[str, float]]]:
                 continue
             if (r.get("conflict") or "").strip().lower() in {"1", "1.0", "true", "yes"}:
                 continue
+            # ponytail: derived rows carry a placeholder ex_date (later report's period_end), not the real one
+            if (r.get("source") or "").strip().lower() == "derived":
+                continue
             try:
                 a = float((r.get("adj_factor") or "").strip())
             except ValueError:

@@ -280,7 +280,7 @@ def test_ambiguity_ignores_actions_after_evaluation_date():
     assert r["per"] == pytest.approx(2.0) and r["split_factor"] == 1.0
     prices = _daily("2024-01-01", 20, 200.0)  # all days before ex_date
     mean, n = average_per(best, "X", prices, [], "2024-01-31", actions=acts, min_points=1)
-    assert n == 20
+    assert n == 20 and mean == pytest.approx(2.0)
 
 
 def test_read_corp_actions_conflicting_duplicate_dropped(tmp_path):
@@ -289,3 +289,10 @@ def test_read_corp_actions_conflicting_duplicate_dropped(tmp_path):
                  "X,SPLIT,2024-06-03,0.2,0\nX,SPLIT,2024-06-03,0.25,0\nX,SPLIT,2024-06-03,0.2,0\n"
                  "X,BONUS,2024-07-01,0.5,0\n", encoding="utf-8")
     assert read_corp_actions(p) == {"X": [("2024-07-01", 0.5)]}
+
+
+def test_read_corp_actions_skips_derived_rows(tmp_path):
+    p = tmp_path / "ca.csv"
+    p.write_text("ticker,action_type,ex_date,adj_factor,conflict,source\n"
+                 "X,SPLIT,2024-06-03,0.2,0,Derived\nY,SPLIT,2024-06-03,0.2,0,ksei\n", encoding="utf-8")
+    assert read_corp_actions(p) == {"Y": [("2024-06-03", 0.2)]}
